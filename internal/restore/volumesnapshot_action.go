@@ -96,7 +96,7 @@ func (p *VolumeSnapshotRestoreItemAction) Execute(input *velero.RestoreItemActio
 		// TODO: generated name will be like velero-velero-something. Fix that.
 		vsc := snapshotv1api.VolumeSnapshotContent{
 			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "velero-" + vs.Name + "-",
+				GenerateName: input.Restore.GetName() + "-" + vs.Name + "-",
 				Labels: map[string]string{
 					velerov1api.RestoreNameLabel: label.GetValidName(input.Restore.Name),
 				},

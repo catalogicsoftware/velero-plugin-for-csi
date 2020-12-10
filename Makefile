@@ -17,9 +17,9 @@ BIN ?= velero-plugin-for-csi
 
 BUILD_IMAGE ?= golang:1.17.13-buster
 
-REGISTRY ?= velero
+REGISTRY ?= catalogicsoftware
 IMAGE_NAME ?= $(REGISTRY)/velero-plugin-for-csi
-TAG ?= dev
+TAG ?= v0.1.2.2
 
 IMAGE ?= $(IMAGE_NAME):$(TAG)
 
