@@ -20,19 +20,17 @@ import (
 	"context"
 	"fmt"
 
+	snapshotv1beta1api "github.com/kubernetes-csi/external-snapshotter/v2/pkg/apis/volumesnapshot/v1beta1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-
-	snapshotv1beta1api "github.com/kubernetes-csi/external-snapshotter/v2/pkg/apis/volumesnapshot/v1beta1"
+	"github.com/vmware-tanzu/velero-plugin-for-csi/internal/util"
+	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	"github.com/vmware-tanzu/velero/pkg/plugin/velero"
 	corev1api "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-
-	"github.com/vmware-tanzu/velero-plugin-for-csi/internal/util"
-	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
-	"github.com/vmware-tanzu/velero/pkg/plugin/velero"
 )
 
 // PVCRestoreItemAction is a restore item action plugin for Velero
@@ -89,18 +87,42 @@ func setPVCStorageResourceRequest(pvc *corev1api.PersistentVolumeClaim, restoreS
 // Execute modifies the PVC's spec to use the volumesnapshot object as the data source ensuring that the newly provisioned volume
 // can be pre-populated with data from the volumesnapshot.
 func (p *PVCRestoreItemAction) Execute(input *velero.RestoreItemActionExecuteInput) (*velero.RestoreItemActionExecuteOutput, error) {
+	p.Log.Info("Starting PersistentVolumeClaimRestoreItemAction")
+
 	var pvc corev1api.PersistentVolumeClaim
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(input.Item.UnstructuredContent(), &pvc); err != nil {
 		return nil, errors.WithStack(err)
 	}
+	var pvcBackup corev1api.PersistentVolumeClaim
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(input.ItemFromBackup.UnstructuredContent(), &pvcBackup); err != nil {
+		return nil, errors.WithStack(err)
+	}
+	// If cross-namespace restore is configured, change the namespace
+	// for PVC object to be restored
+	if val, ok := input.Restore.Spec.NamespaceMapping[pvcBackup.GetNamespace()]; ok {
+		pvc.SetNamespace(val)
+	}
+
 	p.Log.Infof("Starting PVCRestoreItemAction for PVC %s/%s", pvc.Namespace, pvc.Name)
 
 	resetPVCAnnotations(&pvc, []string{velerov1api.BackupNameLabel, util.VolumeSnapshotLabel})
 
-	// If cross-namespace restore is configured, change the namespace
-	// for PVC object to be restored
-	if val, ok := input.Restore.Spec.NamespaceMapping[pvc.GetNamespace()]; ok {
-		pvc.SetNamespace(val)
+	if input.Restore.Spec.RestorePVs != nil && *input.Restore.Spec.RestorePVs == false {
+		p.Log.Info("Returning from PersistentVolumeClaimRestoreItemAction as restorePVs flag is set to false")
+		// Remove the datasource in case it is from a volumesnapshot.
+		// This ensures that a brand new volume is provisioned by the CSI driver.
+		if pvc.Spec.DataSource != nil && pvc.Spec.DataSource.Kind == "VolumeSnapshot" {
+			pvc.Spec.DataSource = nil
+		}
+		pvcMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&pvc)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		p.Log.Infof("restorePVs flag is false. Hence, returning from PVCRestoreItemAction for PVC %s/%s", pvc.Namespace, pvc.Name)
+
+		return &velero.RestoreItemActionExecuteOutput{
+			UpdatedItem: &unstructured.Unstructured{Object: pvcMap},
+		}, nil
 	}
 
 	volumeSnapshotName, ok := pvc.Annotations[util.VolumeSnapshotLabel]
