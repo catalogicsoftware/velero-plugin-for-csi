@@ -17,15 +17,15 @@ limitations under the License.
 package restore
 
 import (
+	snapshotv1beta1api "github.com/kubernetes-csi/external-snapshotter/v2/pkg/apis/volumesnapshot/v1beta1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
 	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-
 	"github.com/vmware-tanzu/velero-plugin-for-csi/internal/util"
 	"github.com/vmware-tanzu/velero/pkg/plugin/velero"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // VolumeSnapshotContentRestoreItemAction is a restore item action plugin for Velero
@@ -45,7 +45,11 @@ func (p *VolumeSnapshotContentRestoreItemAction) AppliesTo() (velero.ResourceSel
 // additional items to restore.
 func (p *VolumeSnapshotContentRestoreItemAction) Execute(input *velero.RestoreItemActionExecuteInput) (*velero.RestoreItemActionExecuteOutput, error) {
 	p.Log.Info("Starting VolumeSnapshotContentRestoreItemAction")
-	var snapCont snapshotv1api.VolumeSnapshotContent
+	if input.Restore.Spec.RestorePVs != nil && *input.Restore.Spec.RestorePVs == false {
+		p.Log.Info("Returning from VolumeSnapshotContentRestoreItemAction as restorePVs flag is set to false")
+		return velero.NewRestoreItemActionExecuteOutput(input.Item), nil
+	}
+	var snapCont snapshotv1beta1api.VolumeSnapshotContent
 
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(input.Item.UnstructuredContent(), &snapCont); err != nil {
 		return &velero.RestoreItemActionExecuteOutput{}, errors.Wrapf(err, "failed to convert input.Item from unstructured")
