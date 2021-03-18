@@ -116,10 +116,22 @@ func (p *PVCRestoreItemAction) Execute(input *velero.RestoreItemActionExecuteInp
 	removePVCAnnotations(&pvc,
 		[]string{AnnBindCompleted, AnnBoundByController, AnnStorageProvisioner, AnnSelectedNode})
 
-	// If cross-namespace restore is configured, change the namespace
-	// for PVC object to be restored
-	if val, ok := input.Restore.Spec.NamespaceMapping[pvc.GetNamespace()]; ok {
-		pvc.SetNamespace(val)
+	if input.Restore.Spec.RestorePVs != nil && *input.Restore.Spec.RestorePVs == false {
+		p.Log.Info("Returning from PersistentVolumeClaimRestoreItemAction as restorePVs flag is set to false")
+		// Remove the datasource in case it is from a volumesnapshot.
+		// This ensures that a brand new volume is provisioned by the CSI driver.
+		if pvc.Spec.DataSource != nil && pvc.Spec.DataSource.Kind == "VolumeSnapshot" {
+			pvc.Spec.DataSource = nil
+		}
+		pvcMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&pvc)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		p.Log.Infof("restorePVs flag is false. Hence, returning from PVCRestoreItemAction for PVC %s/%s", pvc.Namespace, pvc.Name)
+
+		return &velero.RestoreItemActionExecuteOutput{
+			UpdatedItem: &unstructured.Unstructured{Object: pvcMap},
+		}, nil
 	}
 
 	if input.Restore.Spec.RestorePVs != nil && *input.Restore.Spec.RestorePVs == false {
