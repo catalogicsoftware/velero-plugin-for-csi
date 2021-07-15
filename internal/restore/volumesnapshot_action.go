@@ -19,19 +19,17 @@ package restore
 import (
 	"context"
 
+	snapshotv1beta1api "github.com/kubernetes-csi/external-snapshotter/v2/pkg/apis/volumesnapshot/v1beta1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-
-	snapshotv1beta1api "github.com/kubernetes-csi/external-snapshotter/v2/pkg/apis/volumesnapshot/v1beta1"
-	core_v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
-
 	"github.com/vmware-tanzu/velero-plugin-for-csi/internal/util"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/label"
 	"github.com/vmware-tanzu/velero/pkg/plugin/velero"
+	core_v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // VolumeSnapshotRestoreItemAction is a Velero restore item action plugin for VolumeSnapshots
@@ -58,11 +56,25 @@ func resetVolumeSnapshotSpecForRestore(vs *snapshotv1beta1api.VolumeSnapshot, vs
 // to recreate a volumesnapshotcontent object and statically bind the Volumesnapshot object being restored.
 func (p *VolumeSnapshotRestoreItemAction) Execute(input *velero.RestoreItemActionExecuteInput) (*velero.RestoreItemActionExecuteOutput, error) {
 	p.Log.Info("Starting VolumeSnapshotRestoreItemAction")
-	var vs snapshotv1beta1api.VolumeSnapshot
+	if input.Restore.Spec.RestorePVs != nil && *input.Restore.Spec.RestorePVs == false {
+		p.Log.Info("Returning from VolumeSnapshotRestoreItemAction as restorePVs flag is set to false")
+		return velero.NewRestoreItemActionExecuteOutput(input.Item), nil
+	}
 
+	var vs snapshotv1beta1api.VolumeSnapshot
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(input.Item.UnstructuredContent(), &vs); err != nil {
 		return &velero.RestoreItemActionExecuteOutput{}, errors.Wrapf(err, "failed to convert input.Item from unstructured")
 	}
+	var vsBackup snapshotv1beta1api.VolumeSnapshot
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(input.ItemFromBackup.UnstructuredContent(), &vsBackup); err != nil {
+		return &velero.RestoreItemActionExecuteOutput{}, errors.Wrapf(err, "failed to convert input.ItemFromBackup from unstructured")
+	}
+	// If cross-namespace restore is configured, change the namespace
+	// for VolumeSnapshot object to be restored
+	if val, ok := input.Restore.Spec.NamespaceMapping[vsBackup.GetNamespace()]; ok {
+		vs.SetNamespace(val)
+	}
+
 	_, snapClient, err := util.GetClients()
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -86,10 +98,9 @@ func (p *VolumeSnapshotRestoreItemAction) Execute(input *velero.RestoreItemActio
 			deletionPolicy = string(snapshotv1beta1api.VolumeSnapshotContentRetain)
 		}
 
-		// TODO: generated name will be like velero-velero-something. Fix that.
 		vsc := snapshotv1beta1api.VolumeSnapshotContent{
 			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "velero-" + vs.Name + "-",
+				GenerateName: input.Restore.GetName() + "-" + vs.Name + "-",
 				Labels: map[string]string{
 					velerov1api.RestoreNameLabel: label.GetValidName(input.Restore.Name),
 				},
