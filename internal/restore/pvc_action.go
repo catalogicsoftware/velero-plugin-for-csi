@@ -24,16 +24,12 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/vmware-tanzu/velero-plugin-for-csi/internal/util"
-	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/plugin/velero"
 	corev1api "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-
-	"github.com/vmware-tanzu/velero-plugin-for-csi/internal/util"
-	"github.com/vmware-tanzu/velero/pkg/plugin/velero"
 )
 
 const (
