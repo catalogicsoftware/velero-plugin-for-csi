@@ -1,0 +1,38 @@
+name: Main CI
+
+on:
+  push:
+    branches:
+      - 'main'
+      - 'release-**'
+    tags:
+      - '*'
+
+jobs:
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Set up Go 1.17.11
+      uses: actions/setup-go@v2
+      with:
+        go-version: 1.17.11
+      id: go
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v2
+
+    - name: Build
+      run: make all
+
+    - name: Test
+      run: make test
+   
+    # Only try to publish the container image from the root repo; forks don't have permission to do so and will always get failures.
+    - name: Publish container image
+      if: github.repository == 'vmware-tanzu/velero-plugin-for-csi'
+      run: |
+        docker login -u ${{ secrets.DOCKER_USER }} -p ${{ secrets.DOCKER_PASSWORD }}
+        ./hack/docker-push.sh
