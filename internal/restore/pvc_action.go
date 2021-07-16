@@ -116,6 +116,12 @@ func (p *PVCRestoreItemAction) Execute(input *velero.RestoreItemActionExecuteInp
 	removePVCAnnotations(&pvc,
 		[]string{AnnBindCompleted, AnnBoundByController, AnnStorageProvisioner, AnnSelectedNode})
 
+	// If cross-namespace restore is configured, change the namespace
+	// for PVC object to be restored
+	if val, ok := input.Restore.Spec.NamespaceMapping[pvc.GetNamespace()]; ok {
+		pvc.SetNamespace(val)
+	}
+
 	if input.Restore.Spec.RestorePVs != nil && *input.Restore.Spec.RestorePVs == false {
 		p.Log.Info("Returning from PersistentVolumeClaimRestoreItemAction as restorePVs flag is set to false")
 		// Remove the datasource in case it is from a volumesnapshot.
