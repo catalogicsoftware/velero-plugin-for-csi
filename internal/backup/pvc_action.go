@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	"github.com/pkg/errors"
+	"github.com/prometheus/common/log"
 	"github.com/sirupsen/logrus"
 
 	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
@@ -36,6 +37,11 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/label"
 	"github.com/vmware-tanzu/velero/pkg/plugin/velero"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
+	corev1api "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 )
 
 // PVCBackupItemAction is a backup item action plugin for Velero.
@@ -130,16 +136,44 @@ func (p *PVCBackupItemAction) Execute(item runtime.Unstructured, backup *velerov
 
 	upd, err := snapshotClient.SnapshotV1().VolumeSnapshots(pvc.Namespace).Create(context.TODO(), &snapshot, metav1.CreateOptions{})
 	if err != nil {
+		message := "error creating volume snapshot"
+		newErr := errors.Wrapf(err, message)
+		p.Log.Error(newErr.Error())
+		uErr := util.UpdateSnapshotProgress(
+			&pvc,
+			upd,
+			nil,
+			"error",
+			message,
+			backup.Name,
+			p.Log,
+		)
+		if uErr != nil {
+			log.Error(err, "<SNAPSHOT PROGRESS UPDATE> Failed to update snapshot progress. Continuing...")
+		}
+
 		return nil, nil, errors.Wrapf(err, "error creating volume snapshot")
 	}
 	p.Log.Infof("Created volumesnapshot %s", fmt.Sprintf("%s/%s", upd.Namespace, upd.Name))
-
+	uErr := util.UpdateSnapshotProgress(
+		&pvc,
+		upd,
+		nil,
+		"pending",
+		fmt.Sprintf("Waiting for CSI driver to reconcile volumesnapshot %s/%s", pvc.Namespace, pvc.Name),
+		backup.Name,
+		p.Log,
+	)
+	if uErr != nil {
+		log.Error(err, "<SNAPSHOT PROGRESS UPDATE> Failed to update snapshot progress. Continuing...")
+	}
 	vals := map[string]string{
 		util.VolumeSnapshotLabel:    upd.Name,
 		velerov1api.BackupNameLabel: backup.Name,
 	}
 	util.AddAnnotations(&pvc.ObjectMeta, vals)
 	util.AddLabels(&pvc.ObjectMeta, vals)
+	//(pvc,upd,nil, p.log)
 
 	additionalItems := []velero.ResourceIdentifier{
 		{
