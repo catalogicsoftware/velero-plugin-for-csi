@@ -39,13 +39,6 @@ const (
 	AnnSelectedNode       = "volume.kubernetes.io/selected-node"
 )
 
-const (
-	AnnBindCompleted      = "pv.kubernetes.io/bind-completed"
-	AnnBoundByController  = "pv.kubernetes.io/bound-by-controller"
-	AnnStorageProvisioner = "volume.beta.kubernetes.io/storage-provisioner"
-	AnnSelectedNode       = "volume.kubernetes.io/selected-node"
-)
-
 // PVCRestoreItemAction is a restore item action plugin for Velero
 type PVCRestoreItemAction struct {
 	Log logrus.FieldLogger
