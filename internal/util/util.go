@@ -67,7 +67,7 @@ const (
 	// Name of configmap used to to report progress of snapshot
 	SnapshotProgressUpdateConfigMapName = "cloudcasa-io-snapshot-updater"
 
-	TimeFormat = "2006-01-02T15:04:05Z"
+	TimeFormat = "2006-01-06 15:04:05 UTC: "
 )
 
 func GetPVForPVC(pvc *corev1api.PersistentVolumeClaim, corev1 corev1client.PersistentVolumesGetter) (*corev1api.PersistentVolume, error) {
@@ -413,7 +413,7 @@ func UpdateSnapshotProgress(
 	pvcProgressObject.SnapshotType = "CSI"
 	// Fill in the snapshot progress related information
 	var progress = PvcSnapshotProgressData{}
-	currentTimeString := time.Now().Format(TimeFormat)
+	currentTimeString := time.Now().UTC().Format(TimeFormat)
 	progress.State = state
 	progress.Message = currentTimeString + " " + stateMessage
 	progress.JobId = jobID
