@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	snapshotv1beta1api "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1beta1"
 	"github.com/pkg/errors"
 	"github.com/prometheus/common/log"
 	"github.com/sirupsen/logrus"
@@ -40,6 +41,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
+
+	"github.com/vmware-tanzu/velero-plugin-for-csi/internal/util"
 )
 
 // PVCBackupItemAction is a backup item action plugin for Velero.
@@ -122,6 +125,7 @@ func (p *PVCBackupItemAction) Execute(item runtime.Unstructured, backup *velerov
 		p.Log.Warnf("DeletionPolicy on VolumeSnapshotClass %s is not %s; Deletion of VolumeSnapshot objects will lead to deletion of snapshot in the storage provider.",
 			snapshotClass.Name, snapshotv1api.VolumeSnapshotContentRetain)
 	}
+
 	// Craft the snapshot object to be created
 	snapshot := snapshotv1api.VolumeSnapshot{
 		ObjectMeta: metav1.ObjectMeta{
