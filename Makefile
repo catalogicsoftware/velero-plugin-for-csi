@@ -19,7 +19,7 @@ BUILD_IMAGE ?= golang:1.13-stretch
 
 REGISTRY ?= catalogicsoftware
 IMAGE_NAME ?= $(REGISTRY)/velero-plugin-for-csi
-TAG ?= v0.1.2.4
+TAG ?= v0.2.0-rc.1
 
 IMAGE ?= $(IMAGE_NAME):$(TAG)
 
