@@ -13,7 +13,7 @@
 # limitations under the License.
 FROM busybox:1.33.1 AS busybox
 
-FROM gcr.io/distroless/base-debian10:nonroot
+FROM gcr.io/distroless/base-debian11:nonroot
 ADD velero-plugin-for-csi /plugins/
 COPY --from=busybox /bin/cp /bin/cp
 USER nonroot:nonroot
