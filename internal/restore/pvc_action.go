@@ -147,7 +147,7 @@ func (p *PVCRestoreItemAction) Execute(input *velero.RestoreItemActionExecuteInp
 		}, nil
 	}
 
-	_, snapClient, err := util.GetClients()
+	clientset, snapClient, err := util.GetClients()
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -172,7 +172,29 @@ func (p *PVCRestoreItemAction) Execute(input *velero.RestoreItemActionExecuteInp
 		setPVCStorageResourceRequest(&pvc, restoreSize, p.Log)
 	}
 
-	resetPVCSpec(&pvc, volumeSnapshotName)
+	// Get the Storage Class
+	var csiDriverName string
+	storageClassName := pvc.Spec.StorageClassName
+	if storageClassName != nil {
+		storageClass, err := clientset.StorageV1().StorageClasses().Get(context.TODO(), *storageClassName, metav1.GetOptions{})
+		if err != nil {
+			return nil, errors.Wrapf(err, fmt.Sprintf("Failed to get StorageClass %s to check PVC %s/%s provisioner", *storageClassName, pvc.Namespace, pvc.Name))
+		}
+		csiDriverName = storageClass.Provisioner
+	} else {
+		p.Log.Infof("StorageClass is not set for PVC %s/%s", pvc.Namespace, pvc.Name)
+	}
+
+	if csiDriverName != "file.csi.azure.com" {
+		resetPVCSpec(&pvc, volumeSnapshotName)
+	} else {
+		// Set annotation that the PVC users Azure File CSI driver
+		annotations := map[string]string{
+			util.CSIDriverNameAnnotation: "file.csi.azure.com",
+		}
+		util.AddAnnotations(&pvc.ObjectMeta, annotations)
+		p.Log.Infof("Found Azure Files CSI driver. PVC data source will not be changed.")
+	}
 
 	pvcMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&pvc)
 	if err != nil {
