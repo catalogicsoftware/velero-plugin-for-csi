@@ -196,6 +196,25 @@ func (p *PVCRestoreItemAction) Execute(input *velero.RestoreItemActionExecuteInp
 		p.Log.Infof("Found Azure Files CSI driver. PVC data source will not be changed.")
 	}
 
+	// Add annotation to the PVC with VolumeSnapshotContent name
+	vscList, err := snapClient.SnapshotV1beta1().VolumeSnapshotContents().List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return nil, errors.Wrapf(err, fmt.Sprintf("Failed to list VolumeSnapshotContents to restore PVC %s/%s", pvc.Namespace, pvc.Name))
+	}
+	var volumeSnapshotContentName string
+	for _, vsc := range vscList.Items {
+		if vsc.Spec.VolumeSnapshotRef.Name == vs.Name {
+			volumeSnapshotContentName = vsc.Name
+		}
+	}
+	if volumeSnapshotContentName == "" {
+		return nil, fmt.Errorf("Failed to get VolumeSnapshotContent for VolumeSnapshot %s/%s", vs.Namespace, vs.Name)
+	}
+	vscAnnotations := map[string]string{
+		"volume-snapshot-content-name": volumeSnapshotContentName,
+	}
+	util.AddAnnotations(&pvc.ObjectMeta, vscAnnotations)
+
 	pvcMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&pvc)
 	if err != nil {
 		return nil, errors.WithStack(err)
