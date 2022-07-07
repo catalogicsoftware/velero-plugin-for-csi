@@ -204,13 +204,14 @@ func (p *PVCRestoreItemAction) Execute(input *velero.RestoreItemActionExecuteInp
 		for _, vsc := range vscList.Items {
 			if vsc.Spec.VolumeSnapshotRef.Name == volumeSnapshotName {
 				volumeSnapshotContentName = vsc.Name
+				break
 			}
 		}
 		if volumeSnapshotContentName == "" {
 			return nil, fmt.Errorf("Failed to get VolumeSnapshotContent for VolumeSnapshot %s/%s", pvc.Namespace, volumeSnapshotName)
 		}
 		vscAnnotations := map[string]string{
-			"volume-snapshot-content-name": volumeSnapshotContentName,
+			"cloudcasa-volume-snapshot-content-name": volumeSnapshotContentName,
 		}
 		util.AddAnnotations(&pvc.ObjectMeta, vscAnnotations)
 	}
