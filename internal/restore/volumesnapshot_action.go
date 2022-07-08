@@ -70,6 +70,19 @@ func (p *VolumeSnapshotRestoreItemAction) Execute(input *velero.RestoreItemActio
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(input.ItemFromBackup.UnstructuredContent(), &vsBackup); err != nil {
 		return &velero.RestoreItemActionExecuteOutput{}, errors.Wrapf(err, "failed to convert input.ItemFromBackup from unstructured")
 	}
+
+	// Check for VolumeSnapshotClass. If it uses "file.csi.azure.com" driver,
+	// skip VolumeSnapshotRestore action.
+	csiDriverName, exists := vs.Annotations[util.CSIDriverNameAnnotation]
+	if exists {
+		if csiDriverName == "file.csi.azure.com" {
+			p.Log.Infof("Found Azure Files CSI driver. VolumeSnapshot will not be restored.")
+			return &velero.RestoreItemActionExecuteOutput{
+				SkipRestore: true,
+			}, nil
+		}
+	}
+
 	// If cross-namespace restore is configured, change the namespace
 	// for VolumeSnapshot object to be restored
 	if val, ok := input.Restore.Spec.NamespaceMapping[vsBackup.GetNamespace()]; ok {
