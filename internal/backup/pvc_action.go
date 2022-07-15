@@ -170,8 +170,9 @@ func (p *PVCBackupItemAction) Execute(item runtime.Unstructured, backup *velerov
 		log.Error(err, "<SNAPSHOT PROGRESS UPDATE> Failed to update snapshot progress. Continuing...")
 	}
 	vals := map[string]string{
-		util.VolumeSnapshotLabel:    upd.Name,
-		velerov1api.BackupNameLabel: backup.Name,
+		util.VolumeSnapshotLabel:        upd.Name,
+		velerov1api.BackupNameLabel:     backup.Name,
+		"cloudcasa-initial-volume-name": pvc.Spec.VolumeName,
 	}
 	util.AddAnnotations(&pvc.ObjectMeta, vals)
 	util.AddLabels(&pvc.ObjectMeta, vals)
