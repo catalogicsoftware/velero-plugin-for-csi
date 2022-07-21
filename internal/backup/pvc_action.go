@@ -182,6 +182,10 @@ func (p *PVCBackupItemAction) Execute(item runtime.Unstructured, backup *velerov
 		velerov1api.BackupNameLabel:     backup.Name,
 		"cloudcasa-initial-volume-name": pvc.Spec.VolumeName,
 	}
+	if storageClass != nil {
+		vals["cloudcasa-storage-class-provisioner"] = storageClass.Provisioner
+	}
+
 	util.AddAnnotations(&pvc.ObjectMeta, vals)
 	util.AddLabels(&pvc.ObjectMeta, vals)
 	//(pvc,upd,nil, p.log)
