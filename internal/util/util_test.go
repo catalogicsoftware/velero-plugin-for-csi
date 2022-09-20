@@ -26,7 +26,6 @@ import (
 	snapshotFake "github.com/kubernetes-csi/external-snapshotter/client/v4/clientset/versioned/fake"
 	"github.com/sirupsen/logrus"
 	corev1api "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
@@ -64,7 +63,7 @@ func TestGetPVForPVC(t *testing.T) {
 		Spec: corev1api.PersistentVolumeSpec{
 			AccessModes: []corev1api.PersistentVolumeAccessMode{corev1api.ReadWriteOnce},
 			Capacity:    corev1api.ResourceList{},
-			ClaimRef: &v1.ObjectReference{
+			ClaimRef: &corev1api.ObjectReference{
 				Kind:            "PersistentVolumeClaim",
 				Name:            "test-csi-pvc",
 				Namespace:       "default",

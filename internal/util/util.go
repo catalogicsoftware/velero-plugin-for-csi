@@ -25,7 +25,7 @@ import (
 
 	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	snapshotterClientSet "github.com/kubernetes-csi/external-snapshotter/client/v4/clientset/versioned"
-	snapshotter "github.com/kubernetes-csi/external-snapshotter/client/v4/clientset/versioned/typed/volumesnapshot/v1beta1"
+	snapshotter "github.com/kubernetes-csi/external-snapshotter/client/v4/clientset/versioned/typed/volumesnapshot/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
@@ -34,7 +34,7 @@ import (
 	corev1api "k8s.io/api/core/v1"
 	kerror "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
@@ -383,8 +383,8 @@ func HasBackupLabel(o *metav1.ObjectMeta, backupName string) bool {
 // snapshot progress to KubeAgent
 func UpdateSnapshotProgress(
 	pvc *corev1api.PersistentVolumeClaim,
-	vs *snapshotv1beta1api.VolumeSnapshot,
-	vsc *snapshotv1beta1api.VolumeSnapshotContent,
+	vs *snapshotv1api.VolumeSnapshot,
+	vsc *snapshotv1api.VolumeSnapshotContent,
 	state string,
 	stateMessage string,
 	jobID string,
@@ -431,11 +431,11 @@ func UpdateSnapshotProgress(
 	log.Info("Update Snapshot Progress -", "Marsahlled the JSON payload")
 	// create the configmap object.
 	moverConfigMap := corev1api.ConfigMap{
-		TypeMeta: v1.TypeMeta{
+		TypeMeta: metav1.TypeMeta{
 			Kind:       "ConfigMap",
 			APIVersion: "v1",
 		},
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      SnapshotProgressUpdateConfigMapName,
 			Namespace: CloudCasaNamespace,
 		},
@@ -461,8 +461,8 @@ func UpdateSnapshotProgress(
 	log.Info("Update Snapshot Progress -", "Created clientset")
 	//Create or update the configmap
 	var mcm *corev1api.ConfigMap
-	if _, mErr := clientset.CoreV1().ConfigMaps(CloudCasaNamespace).Get(context.TODO(), SnapshotProgressUpdateConfigMapName, v1.GetOptions{}); kerror.IsNotFound(mErr) {
-		mcm, err = clientset.CoreV1().ConfigMaps(CloudCasaNamespace).Create(context.TODO(), &moverConfigMap, v1.CreateOptions{})
+	if _, mErr := clientset.CoreV1().ConfigMaps(CloudCasaNamespace).Get(context.TODO(), SnapshotProgressUpdateConfigMapName, metav1.GetOptions{}); kerror.IsNotFound(mErr) {
+		mcm, err = clientset.CoreV1().ConfigMaps(CloudCasaNamespace).Create(context.TODO(), &moverConfigMap, metav1.CreateOptions{})
 		if err != nil {
 			newErr := errors.Wrap(err, "Failed to create configmap to report snapshotprogress")
 			log.Error(newErr, "Failed to create configmap")
@@ -471,7 +471,7 @@ func UpdateSnapshotProgress(
 		}
 		log.Info("Created configmap to report snapshot progress", "Configmap Name", mcm.GetName())
 	} else {
-		mcm, err = clientset.CoreV1().ConfigMaps(CloudCasaNamespace).Update(context.TODO(), &moverConfigMap, v1.UpdateOptions{})
+		mcm, err = clientset.CoreV1().ConfigMaps(CloudCasaNamespace).Update(context.TODO(), &moverConfigMap, metav1.UpdateOptions{})
 		if err != nil {
 			newErr := errors.Wrap(err, "Failed to update configmap to report snapshotprogress")
 			log.Error(newErr, "Failed to update configmap")
@@ -495,7 +495,7 @@ func DeleteSnapshotProgressConfigMap(log logrus.FieldLogger) {
 	if err != nil {
 		log.Error(errors.Wrap(err, "Failed to create in-cluster clientset"))
 	}
-	err = clientset.CoreV1().ConfigMaps(CloudCasaNamespace).Delete(context.TODO(), SnapshotProgressUpdateConfigMapName, v1.DeleteOptions{})
+	err = clientset.CoreV1().ConfigMaps(CloudCasaNamespace).Delete(context.TODO(), SnapshotProgressUpdateConfigMapName, metav1.DeleteOptions{})
 	if err != nil {
 		log.Error(errors.Wrap(err, "Failed to delete configmap used to report snapshot progress"))
 	} else {

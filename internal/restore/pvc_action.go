@@ -23,8 +23,7 @@ import (
 	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
-	"github.com/vmware-tanzu/velero-plugin-for-csi/internal/util"
+
 	"github.com/vmware-tanzu/velero/pkg/plugin/velero"
 	corev1api "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -160,11 +159,7 @@ func (p *PVCRestoreItemAction) Execute(input *velero.RestoreItemActionExecuteInp
 		return nil, errors.WithStack(err)
 	}
 
-	vs, err := snapClient.SnapshotV1().VolumeSnapshots(pvc.Namespace).Get(context.TODO(), volumeSnapshotName, metav1.GetOptions{})
-	if err != nil {
-		return nil, errors.Wrapf(err, fmt.Sprintf("Failed to get Volumesnapshot %s/%s to restore PVC %s/%s", pvc.Namespace, volumeSnapshotName, pvc.Namespace, pvc.Name))
-    }
-    // Get the Storage Class
+	// Get the Storage Class
 	var csiDriverName string
 	storageClassName := pvc.Spec.StorageClassName
 	if storageClassName != nil {
@@ -179,7 +174,7 @@ func (p *PVCRestoreItemAction) Execute(input *velero.RestoreItemActionExecuteInp
 	}
 
 	if csiDriverName != "file.csi.azure.com" {
-		vs, err := snapClient.SnapshotV1beta1().VolumeSnapshots(pvc.Namespace).Get(context.TODO(), volumeSnapshotName, metav1.GetOptions{})
+		vs, err := snapClient.SnapshotV1().VolumeSnapshots(pvc.Namespace).Get(context.TODO(), volumeSnapshotName, metav1.GetOptions{})
 		if err != nil {
 			return nil, errors.Wrapf(err, fmt.Sprintf("Failed to get Volumesnapshot %s/%s to restore PVC %s/%s", pvc.Namespace, volumeSnapshotName, pvc.Namespace, pvc.Name))
 		}
@@ -208,7 +203,7 @@ func (p *PVCRestoreItemAction) Execute(input *velero.RestoreItemActionExecuteInp
 		p.Log.Infof("Found Azure Files CSI driver. PVC data source will not be changed.")
 
 		// Add annotation to the PVC with VolumeSnapshotContent name
-		vscList, err := snapClient.SnapshotV1beta1().VolumeSnapshotContents().List(context.Background(), metav1.ListOptions{})
+		vscList, err := snapClient.SnapshotV1().VolumeSnapshotContents().List(context.Background(), metav1.ListOptions{})
 		if err != nil {
 			return nil, errors.Wrapf(err, fmt.Sprintf("Failed to list VolumeSnapshotContents to restore PVC %s/%s", pvc.Namespace, pvc.Name))
 		}
