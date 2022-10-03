@@ -157,6 +157,12 @@ func GetVolumeSnapshotClassForStorageClass(provisioner string, snapshotClient sn
 	// other fields in the spec.
 	// https://github.com/kubernetes-csi/external-snapshotter/blob/release-4.2/client/config/crd/snapshot.storage.k8s.io_volumesnapshotclasses.yaml
 	for _, sc := range snapshotClasses.Items {
+		_, hasCloudcasaLabelSelector := sc.Labels[CloudcasaVolumeSnapshotClassSelectorLabel]
+		if sc.Driver == provisioner && hasCloudcasaLabelSelector {
+			return &sc, nil
+		}
+	}
+	for _, sc := range snapshotClasses.Items {
 		_, hasLabelSelector := sc.Labels[VolumeSnapshotClassSelectorLabel]
 		if sc.Driver == provisioner && hasLabelSelector {
 			return &sc, nil
