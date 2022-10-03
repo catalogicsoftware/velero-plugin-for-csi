@@ -25,8 +25,6 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/plugin/velero"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-
-	"github.com/vmware-tanzu/velero-plugin-for-csi/internal/util"
 )
 
 // VolumeSnapshotContentRestoreItemAction is a restore item action plugin for Velero

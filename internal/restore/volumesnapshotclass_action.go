@@ -17,7 +17,6 @@ limitations under the License.
 package restore
 
 import (
-	snapshotv1beta1api "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1beta1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
