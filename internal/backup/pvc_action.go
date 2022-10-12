@@ -107,6 +107,12 @@ func (p *PVCBackupItemAction) Execute(item runtime.Unstructured, backup *velerov
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "error getting storage class")
 	}
+
+	if storageClass.Provisioner == "nfs.csi.k8s.io" {
+		p.Log.Infof("Skipping PVC %s/%s, associated PV %s with provisioner %s is not supported", pvc.Namespace, pvc.Name, pv.Name, "nfs.csi.k8s.io")
+		return item, nil, nil
+	}
+
 	p.Log.Debugf("Fetching volumesnapshot class for %s", storageClass.Provisioner)
 	snapshotClass, err := util.GetVolumeSnapshotClassForStorageClass(storageClass.Provisioner, snapshotClient.SnapshotV1())
 	if err != nil {
