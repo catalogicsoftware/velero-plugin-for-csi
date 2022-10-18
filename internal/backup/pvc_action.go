@@ -108,8 +108,8 @@ func (p *PVCBackupItemAction) Execute(item runtime.Unstructured, backup *velerov
 		return nil, nil, errors.Wrap(err, "error getting storage class")
 	}
 
-	if storageClass.Provisioner == "nfs.csi.k8s.io" {
-		p.Log.Infof("Skipping PVC %s/%s, associated PV %s with provisioner %s is not supported", pvc.Namespace, pvc.Name, pv.Name, "nfs.csi.k8s.io")
+	if storageClass.Provisioner == "nfs.csi.k8s.io" || storageClass.Provisioner == "efs.csi.aws.com" {
+		p.Log.Infof("Skipping PVC %s/%s, associated PV %s with provisioner %s is not supported", pvc.Namespace, pvc.Name, pv.Name, storageClass.Provisioner)
 		return item, nil, nil
 	}
 
