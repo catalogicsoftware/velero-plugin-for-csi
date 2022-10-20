@@ -17,12 +17,18 @@ limitations under the License.
 package backup
 
 import (
+	"context"
+	"fmt"
+
 	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/util/retry"
 
 	"github.com/vmware-tanzu/velero-plugin-for-csi/internal/util"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
@@ -54,6 +60,45 @@ func (p *VolumeSnapshotContentBackupItemAction) Execute(item runtime.Unstructure
 		return nil, nil, errors.WithStack(err)
 	}
 
+	_, snapshotClient, err := util.GetClients()
+	if err != nil {
+		return nil, nil, errors.WithStack(err)
+	}
+	vs, err := snapshotClient.SnapshotV1().VolumeSnapshots(snapCont.Spec.VolumeSnapshotRef.Namespace).Get(context.TODO(), snapCont.Spec.VolumeSnapshotRef.Name, metav1.GetOptions{})
+	if err != nil {
+		return nil, nil, errors.Wrapf(err, fmt.Sprintf("failed to get volumesnapshot from volumesnapshotcontent %s", snapCont.GetName()))
+	}
+	if vs == nil {
+		return nil, nil, fmt.Errorf("nil value of VolumeSnapshot received")
+	}
+	vals := map[string]string{}
+
+	// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
+	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		vsc, err := snapshotClient.SnapshotV1().VolumeSnapshotContents().Get(context.TODO(), snapCont.Name, metav1.GetOptions{})
+		if err != nil {
+			return errors.Wrapf(err, fmt.Sprintf("failed to get volumesnapshotcontent %s", snapCont.Name))
+		}
+		if vsc.Annotations == nil {
+			vsc.Annotations = make(map[string]string)
+		}
+		vals["cc-pvc-name"] = *vs.Spec.Source.PersistentVolumeClaimName
+		vals["cc-pvc-namespace"] = vs.GetNamespace()
+		util.AddAnnotations(&snapCont.ObjectMeta, vals)
+		util.AddAnnotations(&vsc.ObjectMeta, vals)
+		err = nil
+		_, err = snapshotClient.SnapshotV1().VolumeSnapshotContents().Update(context.TODO(), vsc, metav1.UpdateOptions{})
+		if err != nil {
+			p.Log.Errorf("Failed to update VolumeSnapshotContent %s, Error is %v ", vsc.GetName(), err)
+		}
+		return err
+	})
+	if retryErr != nil {
+		p.Log.Errorf("Failed to update VolumeSnapshotContent %s with pvc details in annotations. Error is %v", snapCont.Name, retryErr)
+		return nil, nil, errors.WithStack(retryErr)
+	}
+
+	p.Log.Infof("VolumeSnapshotContent %s successfully updated with PVC details", snapCont.Name)
 	additionalItems := []velero.ResourceIdentifier{}
 
 	// we should backup the snapshot deletion secrets that may be referenced in the volumesnapshotcontent's annotation
@@ -67,5 +112,9 @@ func (p *VolumeSnapshotContentBackupItemAction) Execute(item runtime.Unstructure
 	}
 
 	p.Log.Infof("Returning from VolumeSnapshotContentBackupItemAction with %d additionalItems to backup", len(additionalItems))
-	return item, additionalItems, nil
+	vscMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&snapCont)
+	if err != nil {
+		return nil, nil, errors.WithStack(err)
+	}
+	return &unstructured.Unstructured{Object: vscMap}, additionalItems, nil
 }
