@@ -65,40 +65,51 @@ func (p *VolumeSnapshotContentBackupItemAction) Execute(item runtime.Unstructure
 		return nil, nil, errors.WithStack(err)
 	}
 	vs, err := snapshotClient.SnapshotV1().VolumeSnapshots(snapCont.Spec.VolumeSnapshotRef.Namespace).Get(context.TODO(), snapCont.Spec.VolumeSnapshotRef.Name, metav1.GetOptions{})
-	if err != nil {
-		return nil, nil, errors.Wrapf(err, fmt.Sprintf("failed to get volumesnapshot from volumesnapshotcontent %s", snapCont.GetName()))
-	}
-	if vs == nil {
-		return nil, nil, fmt.Errorf("nil value of VolumeSnapshot received")
-	}
-	vals := map[string]string{}
+	if err != nil && vs != nil && vs.Spec.Source.PersistentVolumeClaimName != nil {
+		// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
+		retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 
-	// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
-	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		vsc, err := snapshotClient.SnapshotV1().VolumeSnapshotContents().Get(context.TODO(), snapCont.Name, metav1.GetOptions{})
-		if err != nil {
-			return errors.Wrapf(err, fmt.Sprintf("failed to get volumesnapshotcontent %s", snapCont.Name))
+			vsc, err := snapshotClient.SnapshotV1().VolumeSnapshotContents().Get(context.TODO(), snapCont.Name, metav1.GetOptions{})
+			if err != nil {
+				return errors.Wrapf(err, fmt.Sprintf("failed to get volumesnapshotcontent %s", snapCont.Name))
+			}
+			if vsc.Annotations == nil {
+				vsc.Annotations = make(map[string]string)
+			}
+			if snapCont.Annotations == nil {
+				snapCont.Annotations = make(map[string]string)
+			}
+			var vscAnnotationsNeedsToBeUpdated bool
+			if _, ok := vsc.GetAnnotations()["cc-pvc-name"]; !ok {
+				if vs.Spec.Source.PersistentVolumeClaimName != nil {
+					vsc.GetAnnotations()["cc-pvc-name"] = *vs.Spec.Source.PersistentVolumeClaimName
+					snapCont.GetAnnotations()["cc-pvc-name"] = *vs.Spec.Source.PersistentVolumeClaimName
+					vscAnnotationsNeedsToBeUpdated = true
+				}
+			}
+			if _, ok := vsc.GetAnnotations()["cc-pvc-namespace"]; !ok {
+				vsc.GetAnnotations()["cc-pvc-namespace"] = vs.GetNamespace()
+				snapCont.GetAnnotations()["cc-pvc-namespace"] = vs.GetNamespace()
+				vscAnnotationsNeedsToBeUpdated = true
+			}
+			if vscAnnotationsNeedsToBeUpdated {
+				err = nil
+				_, err = snapshotClient.SnapshotV1().VolumeSnapshotContents().Update(context.TODO(), vsc, metav1.UpdateOptions{})
+				if err != nil {
+					p.Log.Errorf("Failed to update VolumeSnapshotContent %s, Error is %v ", vsc.GetName(), err)
+					return err
+				}
+				p.Log.Infof("VolumeSnapshotContent %s successfully updated with PVC details", snapCont.Name)
+			}
+			return nil
+		})
+		if retryErr != nil {
+			p.Log.Errorf("Failed to update VolumeSnapshotContent %s with pvc details in annotations. Error is %v", snapCont.Name, retryErr)
+			return nil, nil, errors.WithStack(retryErr)
 		}
-		if vsc.Annotations == nil {
-			vsc.Annotations = make(map[string]string)
-		}
-		vals["cc-pvc-name"] = *vs.Spec.Source.PersistentVolumeClaimName
-		vals["cc-pvc-namespace"] = vs.GetNamespace()
-		util.AddAnnotations(&snapCont.ObjectMeta, vals)
-		util.AddAnnotations(&vsc.ObjectMeta, vals)
-		err = nil
-		_, err = snapshotClient.SnapshotV1().VolumeSnapshotContents().Update(context.TODO(), vsc, metav1.UpdateOptions{})
-		if err != nil {
-			p.Log.Errorf("Failed to update VolumeSnapshotContent %s, Error is %v ", vsc.GetName(), err)
-		}
-		return err
-	})
-	if retryErr != nil {
-		p.Log.Errorf("Failed to update VolumeSnapshotContent %s with pvc details in annotations. Error is %v", snapCont.Name, retryErr)
-		return nil, nil, errors.WithStack(retryErr)
+
 	}
 
-	p.Log.Infof("VolumeSnapshotContent %s successfully updated with PVC details", snapCont.Name)
 	additionalItems := []velero.ResourceIdentifier{}
 
 	// we should backup the snapshot deletion secrets that may be referenced in the volumesnapshotcontent's annotation
