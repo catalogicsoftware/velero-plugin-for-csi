@@ -35,10 +35,12 @@ import (
 )
 
 const (
-	AnnBindCompleted      = "pv.kubernetes.io/bind-completed"
-	AnnBoundByController  = "pv.kubernetes.io/bound-by-controller"
-	AnnStorageProvisioner = "volume.beta.kubernetes.io/storage-provisioner"
-	AnnSelectedNode       = "volume.kubernetes.io/selected-node"
+	AnnBindCompleted          = "pv.kubernetes.io/bind-completed"
+	AnnBoundByController      = "pv.kubernetes.io/bound-by-controller"
+	AnnStorageProvisioner     = "volume.kubernetes.io/storage-provisioner"
+	AnnBetaStorageProvisioner = "volume.beta.kubernetes.io/storage-provisioner"
+	AnnSelectedNode           = "volume.kubernetes.io/selected-node"
+	HarvesterhCiIoOwnedBy     = "harvesterhci.io/owned-by"
 )
 
 // PVCRestoreItemAction is a restore item action plugin for Velero
@@ -116,31 +118,15 @@ func (p *PVCRestoreItemAction) Execute(input *velero.RestoreItemActionExecuteInp
 	p.Log.Infof("Starting PVCRestoreItemAction for PVC %s/%s", pvc.Namespace, pvc.Name)
 
 	removePVCAnnotations(&pvc,
-		[]string{AnnBindCompleted, AnnBoundByController, AnnStorageProvisioner, AnnSelectedNode})
-
-	// If cross-namespace restore is configured, change the namespace
-	// for PVC object to be restored
-	if val, ok := input.Restore.Spec.NamespaceMapping[pvc.GetNamespace()]; ok {
-		pvc.SetNamespace(val)
-	}
-
-	if input.Restore.Spec.RestorePVs != nil && *input.Restore.Spec.RestorePVs == false {
-		p.Log.Info("Returning from PersistentVolumeClaimRestoreItemAction as restorePVs flag is set to false")
-		// Remove the datasource in case it is from a volumesnapshot.
-		// This ensures that a brand new volume is provisioned by the CSI driver.
-		if pvc.Spec.DataSource != nil && pvc.Spec.DataSource.Kind == "VolumeSnapshot" {
-			pvc.Spec.DataSource = nil
-		}
-		pvcMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&pvc)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-		p.Log.Infof("restorePVs flag is false. Hence, returning from PVCRestoreItemAction for PVC %s/%s", pvc.Namespace, pvc.Name)
-
-		return &velero.RestoreItemActionExecuteOutput{
-			UpdatedItem: &unstructured.Unstructured{Object: pvcMap},
-		}, nil
-	}
+		[]string{
+			AnnBindCompleted,
+			AnnBoundByController,
+			AnnBetaStorageProvisioner,
+			AnnStorageProvisioner,
+			AnnSelectedNode,
+			HarvesterhCiIoOwnedBy,
+		},
+	)
 
 	if input.Restore.Spec.RestorePVs != nil && *input.Restore.Spec.RestorePVs == false {
 		p.Log.Info("Returning from PersistentVolumeClaimRestoreItemAction as restorePVs flag is set to false")
@@ -158,18 +144,6 @@ func (p *PVCRestoreItemAction) Execute(input *velero.RestoreItemActionExecuteInp
 		return &velero.RestoreItemActionExecuteOutput{
 			UpdatedItem: &unstructured.Unstructured{Object: pvcMap},
 		}, nil
-	}
-
-	// If cross-namespace restore is configured, change the namespace
-	// for PVC object to be restored
-	if val, ok := input.Restore.Spec.NamespaceMapping[pvc.GetNamespace()]; ok {
-		pvc.SetNamespace(val)
-	}
-
-	// If cross-namespace restore is configured, change the namespace
-	// for PVC object to be restored
-	if val, ok := input.Restore.Spec.NamespaceMapping[pvc.GetNamespace()]; ok {
-		pvc.SetNamespace(val)
 	}
 
 	volumeSnapshotName, ok := pvc.Annotations[util.VolumeSnapshotLabel]
