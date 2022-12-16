@@ -105,6 +105,21 @@ func (p *PVCBackupItemAction) Execute(item runtime.Unstructured, backup *velerov
 	p.Log.Infof("Fetching storage class for PV %s", *pvc.Spec.StorageClassName)
 	storageClass, err := client.StorageV1().StorageClasses().Get(context.TODO(), *pvc.Spec.StorageClassName, metav1.GetOptions{})
 	if err != nil {
+		message := fmt.Sprintf("Storage Class %s not found", *pvc.Spec.StorageClassName)
+		newErr := errors.Wrapf(err, message)
+		p.Log.Error(newErr.Error())
+		uErr := util.UpdateSnapshotProgress(
+			&pvc,
+			nil,
+			nil,
+			"error",
+			message,
+			backup.Name,
+			p.Log,
+		)
+		if uErr != nil {
+			log.Error(err, "<SNAPSHOT PROGRESS UPDATE> Failed to update snapshot progress. Continuing...")
+		}
 		return nil, nil, errors.Wrap(err, "error getting storage class")
 	}
 
