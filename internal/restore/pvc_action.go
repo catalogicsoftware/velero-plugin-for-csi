@@ -174,26 +174,51 @@ func (p *PVCRestoreItemAction) Execute(input *velero.RestoreItemActionExecuteInp
 	}
 
 	if csiDriverName != "file.csi.azure.com" {
-		vs, err := snapClient.SnapshotV1().VolumeSnapshots(pvc.Namespace).Get(context.TODO(), volumeSnapshotName, metav1.GetOptions{})
+		restoreFromCopy, err := util.IsPVCRestoreFromCopy(p.Log, pvcBackup.Namespace, pvcBackup.Name)
 		if err != nil {
-			return nil, errors.Wrapf(err, fmt.Sprintf("Failed to get Volumesnapshot %s/%s to restore PVC %s/%s", pvc.Namespace, volumeSnapshotName, pvc.Namespace, pvc.Name))
+			return nil, errors.Wrapf(err, "Failed to check if PVC %s/%s is being restored from a copy",
+				pvcBackup.Namespace, pvcBackup.Name)
 		}
 
-		if _, exists := vs.Annotations[util.VolumeSnapshotRestoreSize]; exists {
-			restoreSize, err := resource.ParseQuantity(vs.Annotations[util.VolumeSnapshotRestoreSize])
-			if err != nil {
-				return nil, errors.Wrapf(err, fmt.Sprintf("Failed to parse %s from annotation on Volumesnapshot %s/%s into restore size",
-					vs.Annotations[util.VolumeSnapshotRestoreSize], vs.Namespace, vs.Name))
+		if restoreFromCopy {
+			// Remove dataSource and dataSourceRef from the PVC if they are VolumeSnapshot kind
+			if pvc.Spec.DataSource != nil {
+				if pvc.Spec.DataSource.Kind == "VolumeSnapshot" {
+					p.Log.Infof("PVC %s/%s has a VolumeSnapshot as dataSource. Removing it",
+						pvcBackup.Namespace, pvcBackup.Name)
+					pvc.Spec.DataSource = nil
+				}
 			}
-			// It is possible that the volume provider allocated a larger capacity volume than what was requested in the backed up PVC.
-			// In this scenario the volumesnapshot of the PVC will endup being larger than its requested storage size.
-			// Such a PVC, on restore as-is, will be stuck attempting to use a Volumesnapshot as a data source for a PVC that
-			// is not large enough.
-			// To counter that, here we set the storage request on the PVC to the larger of the PVC's storage request and the size of the
-			// VolumeSnapshot
-			setPVCStorageResourceRequest(&pvc, restoreSize, p.Log)
+			if pvc.Spec.DataSourceRef != nil {
+				if pvc.Spec.DataSourceRef.Kind == "VolumeSnapshot" {
+					p.Log.Infof("PVC %s/%s has a VolumeSnapshot as dataSourceRef. Removing it",
+						pvcBackup.Namespace, pvcBackup.Name)
+					pvc.Spec.DataSourceRef = nil
+				}
+			}
+		} else {
+			vs, err := snapClient.SnapshotV1().VolumeSnapshots(pvc.Namespace).Get(context.TODO(), volumeSnapshotName, metav1.GetOptions{})
+			if err != nil {
+				return nil, errors.Wrapf(err, fmt.Sprintf("Failed to get Volumesnapshot %s/%s to restore PVC %s/%s",
+					pvc.Namespace, volumeSnapshotName, pvc.Namespace, pvc.Name))
+			}
+
+			if _, exists := vs.Annotations[util.VolumeSnapshotRestoreSize]; exists {
+				restoreSize, err := resource.ParseQuantity(vs.Annotations[util.VolumeSnapshotRestoreSize])
+				if err != nil {
+					return nil, errors.Wrapf(err, fmt.Sprintf("Failed to parse %s from annotation on Volumesnapshot %s/%s into restore size",
+						vs.Annotations[util.VolumeSnapshotRestoreSize], vs.Namespace, vs.Name))
+				}
+				// It is possible that the volume provider allocated a larger capacity volume than what was requested in the backed up PVC.
+				// In this scenario the volumesnapshot of the PVC will endup being larger than its requested storage size.
+				// Such a PVC, on restore as-is, will be stuck attempting to use a Volumesnapshot as a data source for a PVC that
+				// is not large enough.
+				// To counter that, here we set the storage request on the PVC to the larger of the PVC's storage request and the size of the
+				// VolumeSnapshot
+				setPVCStorageResourceRequest(&pvc, restoreSize, p.Log)
+			}
+			resetPVCSpec(&pvc, volumeSnapshotName)
 		}
-		resetPVCSpec(&pvc, volumeSnapshotName)
 	} else {
 		// Set annotation that the PVC users Azure File CSI driver
 		annotations := map[string]string{

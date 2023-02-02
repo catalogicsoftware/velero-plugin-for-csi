@@ -54,6 +54,39 @@ func (p *VolumeSnapshotContentRestoreItemAction) Execute(input *velero.RestoreIt
 		return &velero.RestoreItemActionExecuteOutput{}, errors.Wrapf(err, "failed to convert input.Item from unstructured")
 	}
 
+	var pvcNamespace string
+	var pvcName string
+
+	if snapCont.GetAnnotations() != nil {
+		if value, found := snapCont.GetAnnotations()["cc-pvc-namespace"]; found {
+			pvcNamespace = value
+		} else {
+			p.Log.Infof("VolumeSnapshotContent %s does not have cc-pvc-namespace annotation", snapCont.Name)
+		}
+
+		if value, found := snapCont.GetAnnotations()["cc-pvc-name"]; found {
+			pvcName = value
+		} else {
+			p.Log.Infof("VolumeSnapshotContent %s does not have cc-pvc-name annotation", snapCont.Name)
+		}
+	}
+
+	if pvcNamespace != "" && pvcName != "" {
+		restoreFromCopy, err := util.IsPVCRestoreFromCopy(p.Log, pvcNamespace, pvcName)
+		if err != nil {
+			return nil, errors.Wrapf(err, "Failed to check if PVC %s/%s is being restored from a copy", pvcNamespace, pvcName)
+		}
+
+		if restoreFromCopy {
+			p.Log.Infof("PVC %s/%s is being restored from a copy, skip restoring VolumeSnapshotContent %s",
+				pvcNamespace, pvcName, snapCont.Name)
+
+			return &velero.RestoreItemActionExecuteOutput{
+				SkipRestore: true,
+			}, nil
+		}
+	}
+
 	additionalItems := []velero.ResourceIdentifier{}
 	if util.IsVolumeSnapshotContentHasDeleteSecret(&snapCont) {
 		additionalItems = append(additionalItems,

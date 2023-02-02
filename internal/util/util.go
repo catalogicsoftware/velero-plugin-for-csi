@@ -70,6 +70,8 @@ const (
 	// Name of configmap used to to report progress of snapshot
 	SnapshotProgressUpdateConfigMapName = "cloudcasa-io-snapshot-updater"
 
+	moverConfigMapName = "cloudcasa-io-data-mover"
+
 	TimeFormat = "2006-01-06 15:04:05 UTC: "
 )
 
@@ -545,4 +547,92 @@ func DeleteSnapshotProgressConfigMap(log logrus.FieldLogger) {
 	} else {
 		log.Info("Deleted configmap used to report snapshot progress", "Configmap Name", SnapshotProgressUpdateConfigMapName)
 	}
+}
+
+// IsPVCRestoreFromCopy checks if PVC is being restored from a copy
+func IsPVCRestoreFromCopy(log logrus.FieldLogger, pvcNamespace string, pvcName string) (bool, error) {
+
+	moverConfigMap, err := GetConfigMap(log, pvcNamespace, moverConfigMapName)
+	if err != nil {
+		return false, err
+	}
+
+	if moverConfigMap != nil {
+		namespacePvcMap := make(map[string][]string)
+		err = json.Unmarshal(moverConfigMap.BinaryData["namespace_pvc_map"], &namespacePvcMap)
+		if err != nil {
+			log.Error(errors.Wrap(err, "Failed to unmarshal namespace_pvc_map"))
+			return false, err
+		}
+
+		if pvcList, namespaceFound := namespacePvcMap[pvcNamespace]; namespaceFound {
+			for _, pvc := range pvcList {
+				if pvc == pvcName {
+					log.Info("PVC will be restored from copy", "pvcName", pvcName, "pvcNamespace", pvcNamespace)
+					return true, nil
+				}
+			}
+		}
+	}
+
+	log.Info("PVC will not be restored from copy", "pvcName", pvcName, "pvcNamespace", pvcNamespace)
+	return false, nil
+}
+
+// GetConfigMap returns the configmap
+func GetConfigMap(log logrus.FieldLogger, namespace string, name string) (*corev1api.ConfigMap, error) {
+
+	clientset, err := GetClientSet(log)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if configmap exists
+	configmaps, err := clientset.CoreV1().ConfigMaps(namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		message := fmt.Sprintf("Failed to list configmaps in namespace %s", namespace)
+		log.Error(errors.Wrap(err, message))
+		return nil, err
+	}
+
+	configmapFound := false
+	for _, configmap := range configmaps.Items {
+		if configmap.Name == name {
+			configmapFound = true
+			break
+		}
+	}
+
+	if !configmapFound {
+		log.Info(fmt.Sprintf("Configmap %s not found in namespace %s", name, namespace))
+		return nil, nil
+	}
+
+	// Get configmap
+	configmap, err := clientset.CoreV1().ConfigMaps(namespace).Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		message := fmt.Sprintf("Failed to get configmap %s in namespace %s", name, namespace)
+		log.Error(errors.Wrap(err, message))
+		return nil, err
+	}
+
+	return configmap, nil
+}
+
+// GetClientSet returns the clientset
+func GetClientSet(log logrus.FieldLogger) (*kubernetes.Clientset, error) {
+
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		log.Error(errors.Wrap(err, "Failed to create in-cluster config"))
+		return nil, err
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		log.Error(errors.Wrap(err, "Failed to create clientset"))
+		return nil, err
+	}
+
+	return clientset, nil
 }

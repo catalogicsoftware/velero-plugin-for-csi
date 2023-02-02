@@ -95,6 +95,22 @@ func (p *VolumeSnapshotRestoreItemAction) Execute(input *velero.RestoreItemActio
 		vs.SetNamespace(val)
 	}
 
+	pvcNamespace := vsBackup.GetNamespace()
+	pvcName := *vsBackup.Spec.Source.PersistentVolumeClaimName
+	restoreFromCopy, err := util.IsPVCRestoreFromCopy(p.Log, pvcNamespace, pvcName)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Failed to check if PVC %s/%s is being restored from a copy", pvcNamespace, pvcName)
+	}
+
+	if restoreFromCopy {
+		p.Log.Infof("PVC %s/%s is being restored from a copy. VolumeSnapshot %s/%s will not be restored",
+			pvcNamespace, pvcName, vs.Namespace, vs.Name)
+
+		return &velero.RestoreItemActionExecuteOutput{
+			SkipRestore: true,
+		}, nil
+	}
+
 	_, snapClient, err := util.GetClients()
 	if err != nil {
 		return nil, errors.WithStack(err)
