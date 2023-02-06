@@ -135,6 +135,9 @@ func (p *PVCRestoreItemAction) Execute(input *velero.RestoreItemActionExecuteInp
 		if pvc.Spec.DataSource != nil && pvc.Spec.DataSource.Kind == "VolumeSnapshot" {
 			pvc.Spec.DataSource = nil
 		}
+		if pvc.Spec.DataSourceRef != nil && pvc.Spec.DataSourceRef.Kind == "VolumeSnapshot" {
+			pvc.Spec.DataSourceRef = nil
+		}
 		pvcMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&pvc)
 		if err != nil {
 			return nil, errors.WithStack(err)
