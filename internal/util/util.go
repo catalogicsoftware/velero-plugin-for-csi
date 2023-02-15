@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,6 +62,10 @@ type PvcSnapshotProgressData struct {
 	Pvc              *PvcInfo `json:"pvc,omitempty"`
 }
 
+type PluginConfig struct {
+	SnapshotLonghorn bool
+}
+
 const (
 	//TODO: use annotation from velero https://github.com/vmware-tanzu/velero/pull/2283
 	resticPodAnnotation = "backup.velero.io/backup-volumes"
@@ -69,6 +74,9 @@ const (
 
 	// Name of configmap used to to report progress of snapshot
 	SnapshotProgressUpdateConfigMapName = "cloudcasa-io-snapshot-updater"
+
+	// VeleroCsiPluginConfigMapName is the name of the configmap used to store configuration parameters
+	VeleroCsiPluginConfigMapName = "cloudcasa-io-velero-csi-plugin"
 
 	TimeFormat = "2006-01-06 15:04:05 UTC: "
 )
@@ -545,4 +553,48 @@ func DeleteSnapshotProgressConfigMap(log logrus.FieldLogger) {
 	} else {
 		log.Info("Deleted configmap used to report snapshot progress", "Configmap Name", SnapshotProgressUpdateConfigMapName)
 	}
+}
+
+// GetPluginConfig reads the configmap that contains config parameters for this plugin
+func GetPluginConfig(log logrus.FieldLogger) (*PluginConfig, error) {
+	clientset, err := GetClientset(log)
+	if err != nil {
+		return nil, err
+	}
+
+	configMap, err := clientset.CoreV1().ConfigMaps(CloudCasaNamespace).Get(context.TODO(), VeleroCsiPluginConfigMapName, metav1.GetOptions{})
+	if err != nil {
+		log.Error(errors.Wrapf(err, "Failed to get %q configmap in %q namespace", VeleroCsiPluginConfigMapName, CloudCasaNamespace))
+		return nil, err
+	}
+
+	snapshotLonghornString := string(configMap.BinaryData["snapshotLonghorn"])
+	snapshotLonghorn, err := strconv.ParseBool(snapshotLonghornString)
+	if err != nil {
+		log.Error(errors.Wrapf(err, "Failed to parse snapshotLonghorn value %q from %q", snapshotLonghornString, VeleroCsiPluginConfigMapName))
+		return nil, err
+	}
+	if snapshotLonghorn {
+		log.Info("Will snapshot Longhorn PVCs instead of doing live backup")
+	}
+
+	return &PluginConfig{
+		SnapshotLonghorn: snapshotLonghorn,
+	}, nil
+}
+
+func GetClientset(log logrus.FieldLogger) (*kubernetes.Clientset, error) {
+	// creates the in-cluster config
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		log.Error(errors.Wrap(err, "Failed to create in-cluster config"))
+		return nil, err
+	}
+	// creates the clientset
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		log.Error(errors.Wrap(err, "Failed to create in-cluster clientset"))
+		return nil, err
+	}
+	return clientset, nil
 }
