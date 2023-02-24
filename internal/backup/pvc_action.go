@@ -46,6 +46,10 @@ type PVCBackupItemAction struct {
 	Log logrus.FieldLogger
 }
 
+// liveCopyDrivers is a list of drivers for which we will skip creating the snapshot and will copy data live
+// Must match liveCopyDrivers in amdslib/utils/utils.go
+var liveCopyDrivers = []string{"nfs.csi.k8s.io", "efs.csi.aws.com", "driver.longhorn.io"}
+
 // AppliesTo returns information indicating that the PVCBackupItemAction should be invoked to backup PVCs.
 func (p *PVCBackupItemAction) AppliesTo() (velero.ResourceSelector, error) {
 	p.Log.Debug("PVCBackupItemAction AppliesTo")
@@ -123,9 +127,20 @@ func (p *PVCBackupItemAction) Execute(item runtime.Unstructured, backup *velerov
 		return nil, nil, errors.Wrap(err, "error getting storage class")
 	}
 
-	if storageClass.Provisioner == "nfs.csi.k8s.io" || storageClass.Provisioner == "efs.csi.aws.com" {
-		p.Log.Infof("Skipping PVC %s/%s, associated PV %s with provisioner %s is not supported", pvc.Namespace, pvc.Name, pv.Name, storageClass.Provisioner)
-		return item, nil, nil
+	config, err := util.GetPluginConfig(p.Log)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "error getting plugin config")
+	}
+
+	for _, driver := range liveCopyDrivers {
+		if config.SnapshotLonghorn && (driver == "driver.longhorn.io") {
+			continue
+		}
+		if storageClass.Provisioner == driver {
+			p.Log.Infof("Skipping PVC %s/%s, associated PV %s with provisioner %s is not supported",
+				pvc.Namespace, pvc.Name, pv.Name, storageClass.Provisioner)
+			return item, nil, nil
+		}
 	}
 
 	p.Log.Debugf("Fetching volumesnapshot class for %s", storageClass.Provisioner)
