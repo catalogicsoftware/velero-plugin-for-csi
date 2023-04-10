@@ -63,7 +63,8 @@ type PvcSnapshotProgressData struct {
 }
 
 type PluginConfig struct {
-	SnapshotLonghorn bool
+	SnapshotLonghorn   bool
+	CsiSnapshotTimeout int
 }
 
 const (
@@ -195,14 +196,22 @@ func GetVolumeSnapshotContentForVolumeSnapshot(volSnap *snapshotv1api.VolumeSnap
 	}
 
 	// We'll wait 10m for the VSC to be reconciled polling every 5s
-	// TODO: make this timeout configurable.
 	timeout := 10 * time.Minute
+	config, err := GetPluginConfig(log)
+	if err != nil {
+		return nil, errors.Wrap(err, "error getting plugin config")
+	}
+	if config.CsiSnapshotTimeout > 0 {
+		timeout = time.Duration(config.CsiSnapshotTimeout) * time.Minute
+	}
+	log.Infof("Waiting up to %v for CSI driver to reconcile volumesnapshot %s/%s", timeout, volSnap.Namespace, volSnap.Name)
+
 	interval := 5 * time.Second
 	var snapshotContent *snapshotv1api.VolumeSnapshotContent
 
 	defer DeleteSnapshotProgressConfigMap(log)
 	jobID := volSnap.Labels["velero.io/backup-name"]
-	err := wait.PollImmediate(interval, timeout, func() (bool, error) {
+	err = wait.PollImmediate(interval, timeout, func() (bool, error) {
 		vs, err := snapshotClient.VolumeSnapshots(volSnap.Namespace).Get(context.TODO(), volSnap.Name, metav1.GetOptions{})
 		if err != nil {
 			return false, errors.Wrapf(err, fmt.Sprintf("failed to get volumesnapshot %s/%s", volSnap.Namespace, volSnap.Name))
@@ -578,8 +587,19 @@ func GetPluginConfig(log logrus.FieldLogger) (*PluginConfig, error) {
 		log.Info("Will snapshot Longhorn PVCs instead of doing live backup")
 	}
 
+	csiSnapshotTimeoutString := string(configMap.BinaryData["csiSnapshotTimeout"])
+	csiSnapshotTimeout, err := strconv.Atoi(csiSnapshotTimeoutString)
+	if err != nil {
+		log.Error(errors.Wrapf(err, "Failed to parse csiSnapshotTimeout value %q from %q", csiSnapshotTimeoutString, VeleroCsiPluginConfigMapName))
+		return nil, err
+	}
+	if csiSnapshotTimeout != 0 {
+		log.Info("CSI snapshot timeout is set", "timeout", csiSnapshotTimeout)
+	}
+
 	return &PluginConfig{
-		SnapshotLonghorn: snapshotLonghorn,
+		SnapshotLonghorn:   snapshotLonghorn,
+		CsiSnapshotTimeout: csiSnapshotTimeout,
 	}, nil
 }
 
