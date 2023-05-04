@@ -27,8 +27,11 @@ import (
 	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	corev1api "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
+	"k8s.io/client-go/rest"
 
 	"github.com/vmware-tanzu/velero-plugin-for-csi/internal/util"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
@@ -39,6 +42,18 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+)
+
+const (
+	// StaticPvcAnnotation should be set in the user wants to backup
+	// a staticlly provisioned Azure File Share using CSI.
+	StaticAzureFilePvcAnnotation                = "cloudcasa-azure-file-share-name"
+	StaticAzureFilePvcSecretNameAnnotation      = "cloudcasa-azure-file-share-secret-name"
+	StaticAzureFilePvcSecretNamespaceAnnotation = "cloudcasa-azure-file-share-secret-namespace"
+	// StaticSecretAnnotation should be set for secret that has credentials
+	// to Azure Storage Account in which File Share that needs to be backed up
+	// is located
+	StaticAzureFileSecretAnnotation = "cloudcasa-azure-storage-account-credentials"
 )
 
 // PVCBackupItemAction is a backup item action plugin for Velero.
@@ -215,6 +230,66 @@ func (p *PVCBackupItemAction) Execute(item runtime.Unstructured, backup *velerov
 	}
 	if storageClass != nil {
 		vals["cloudcasa-storage-class-provisioner"] = storageClass.Provisioner
+	}
+
+	// For Azure File PVs, we need to check if the volume has been provisioned statically.
+	// If so, we need to store file share name, secret name, and secret namespace as annotation.
+	// Then, during restore, our Azure Files Mover will pick these values to restore from a
+	// statically provisioned volume.
+	if storageClass.Provisioner == "file.csi.azure.com" {
+		p.Log.Infof("Found %s PVC %s/%s. Getting %s PV details", storageClass.Provisioner, pvc.Namespace, pvc.Name, pvc.Spec.VolumeName)
+		config, err := rest.InClusterConfig()
+		if err != nil {
+			p.Log.Errorf("Failed to get in-cluster Kubernetes config: %w", err)
+			return nil, nil, errors.WithStack(err)
+		}
+
+		clientset, err := kubernetes.NewForConfig(config)
+		if err != nil {
+			p.Log.Errorf("Failed to get Kubernetes clientset for in-cluster config: %w", err)
+			return nil, nil, errors.WithStack(err)
+		}
+		pv, err := clientset.CoreV1().PersistentVolumes().Get(context.TODO(), pvc.Spec.VolumeName, v1.GetOptions{})
+		if err != nil {
+			p.Log.Errorf("Failed to get PV %s for PVC %s/%s: %w", pvc.Spec.VolumeName, pvc.Namespace, pvc.Name, err)
+			return nil, nil, errors.WithStack(err)
+		}
+		if pv.Spec.CSI != nil {
+			// Check if the PV was provisioned dynamically or statically
+			if _, exists := pv.Spec.CSI.VolumeAttributes["csi.storage.k8s.io/pv/name"]; exists {
+				// The PV is provisioned dynamically. No need to read any attributes
+				p.Log.Infof("Dynamically provisioned %s PV %s bounded with PVC %s/%s found", storageClass.Provisioner, pv.Name, pvc.Namespace, pvc.Name)
+			} else {
+				p.Log.Infof("Statically provisioned %s PV %s bounded with PVC %s/%s found", storageClass.Provisioner, pv.Name, pvc.Namespace, pvc.Name)
+				volumeAttributes := pv.Spec.CSI.VolumeAttributes
+				nodeStageSecretRef := pv.Spec.CSI.NodeStageSecretRef
+				shareName, exists := volumeAttributes["shareName"]
+				if !exists {
+					err = fmt.Errorf("PV %s bound to PVC %s/%s does not have File Share name set", pv.Name, pvc.Namespace, pvc.Name)
+					p.Log.Error(err)
+					return nil, nil, errors.WithStack(err)
+				}
+				if nodeStageSecretRef == nil {
+					err = fmt.Errorf("PV %s bound to PVC %s/%s does not have secret details set", pv.Name, pvc.Namespace, pvc.Name)
+					p.Log.Error(err)
+					return nil, nil, errors.WithStack(err)
+				}
+				secretName := nodeStageSecretRef.Name
+				secretNamespace := nodeStageSecretRef.Namespace
+				if secretNamespace == "" {
+					p.Log.Infof("Secret for PV %s bounded with PVC %s/%s is empty. Assuming PVC namespace as the secret namespace", pv.Name, pvc.Namespace, pvc.Name)
+				}
+				ccAzureFilesAnnotations := map[string]string{
+					StaticAzureFilePvcAnnotation:                shareName,
+					StaticAzureFilePvcSecretNameAnnotation:      secretName,
+					StaticAzureFilePvcSecretNamespaceAnnotation: secretNamespace,
+				}
+				for k, v := range ccAzureFilesAnnotations {
+					vals[k] = v
+				}
+				p.Log.Infof("Setting new annotations %v for PVC %s/%s", vals, pvc.Namespace, pvc.Name)
+			}
+		}
 	}
 
 	util.AddAnnotations(&pvc.ObjectMeta, vals)
