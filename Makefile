@@ -19,7 +19,7 @@ BUILD_IMAGE ?= golang:1.17.13-buster
 
 REGISTRY ?= catalogicsoftware
 IMAGE_NAME ?= $(REGISTRY)/velero-plugin-for-csi
-TAG ?= v0.3.1.9
+TAG ?= v0.3.1.10
 
 IMAGE ?= $(IMAGE_NAME):$(TAG)
 
