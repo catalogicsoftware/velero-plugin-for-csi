@@ -45,15 +45,12 @@ import (
 )
 
 const (
-	// StaticPvcAnnotation should be set in the user wants to backup
-	// a staticlly provisioned Azure File Share using CSI.
-	StaticAzureFilePvcAnnotation                = "cloudcasa-azure-file-share-name"
-	StaticAzureFilePvcSecretNameAnnotation      = "cloudcasa-azure-file-share-secret-name"
-	StaticAzureFilePvcSecretNamespaceAnnotation = "cloudcasa-azure-file-share-secret-namespace"
-	// StaticSecretAnnotation should be set for secret that has credentials
-	// to Azure Storage Account in which File Share that needs to be backed up
-	// is located
-	StaticAzureFileSecretAnnotation = "cloudcasa-azure-storage-account-credentials"
+	// These annotation are set for Azure File PVCs. They must match values in azurefilemover/utils/utils.go
+	// Our Azure File mover reads these values and picks the right file share and snapshot
+	// based on them.
+	StaticAzureFilePvcAnnotation                = "cloudcasa-source-azure-file-share-name"
+	StaticAzureFilePvcSecretNameAnnotation      = "cloudcasa-source-azure-file-share-secret-name"
+	StaticAzureFilePvcSecretNamespaceAnnotation = "cloudcasa-source-azure-file-share-secret-namespace"
 )
 
 // PVCBackupItemAction is a backup item action plugin for Velero.
@@ -255,40 +252,62 @@ func (p *PVCBackupItemAction) Execute(item runtime.Unstructured, backup *velerov
 			return nil, nil, errors.WithStack(err)
 		}
 		if pv.Spec.CSI != nil {
+			var shareName, secretName, secretNamespace string
+			var isDynamicallyProvisioned bool
 			// Check if the PV was provisioned dynamically or statically
-			if _, exists := pv.Spec.CSI.VolumeAttributes["csi.storage.k8s.io/pv/name"]; exists {
-				// The PV is provisioned dynamically. No need to read any attributes
+			volumeAttributes := pv.Spec.CSI.VolumeAttributes
+			if _, exists := volumeAttributes["csi.storage.k8s.io/pv/name"]; exists {
 				p.Log.Infof("Dynamically provisioned %s PV %s bounded with PVC %s/%s found", storageClass.Provisioner, pv.Name, pvc.Namespace, pvc.Name)
+				isDynamicallyProvisioned = true
+
 			} else {
 				p.Log.Infof("Statically provisioned %s PV %s bounded with PVC %s/%s found", storageClass.Provisioner, pv.Name, pvc.Namespace, pvc.Name)
-				volumeAttributes := pv.Spec.CSI.VolumeAttributes
-				nodeStageSecretRef := pv.Spec.CSI.NodeStageSecretRef
-				shareName, exists := volumeAttributes["shareName"]
-				if !exists {
-					err = fmt.Errorf("PV %s bound to PVC %s/%s does not have File Share name set", pv.Name, pvc.Namespace, pvc.Name)
-					p.Log.Error(err)
-					return nil, nil, errors.WithStack(err)
-				}
-				if nodeStageSecretRef == nil {
-					err = fmt.Errorf("PV %s bound to PVC %s/%s does not have secret details set", pv.Name, pvc.Namespace, pvc.Name)
-					p.Log.Error(err)
-					return nil, nil, errors.WithStack(err)
-				}
-				secretName := nodeStageSecretRef.Name
-				secretNamespace := nodeStageSecretRef.Namespace
-				if secretNamespace == "" {
-					p.Log.Infof("Secret for PV %s bounded with PVC %s/%s is empty. Assuming PVC namespace as the secret namespace", pv.Name, pvc.Namespace, pvc.Name)
-				}
-				ccAzureFilesAnnotations := map[string]string{
-					StaticAzureFilePvcAnnotation:                shareName,
-					StaticAzureFilePvcSecretNameAnnotation:      secretName,
-					StaticAzureFilePvcSecretNamespaceAnnotation: secretNamespace,
-				}
-				for k, v := range ccAzureFilesAnnotations {
-					vals[k] = v
-				}
-				p.Log.Infof("Setting new annotations %v for PVC %s/%s", vals, pvc.Namespace, pvc.Name)
+				isDynamicallyProvisioned = false
 			}
+
+			// Get name of the File Share where files are stored
+			shareName, err = util.GetAzureFileShareName(pvc, pv, storageClass, p.Log, isDynamicallyProvisioned)
+			if err != nil {
+				p.Log.Errorf(
+					"Could not find file share name for %s PV %s bounded with PVC %s/%s",
+					storageClass.Provisioner, pv.Name, pvc.Namespace, pvc.Namespace,
+				)
+				return nil, nil, errors.WithStack(err)
+			}
+			p.Log.Infof("Found file share name for %s PV %s bounded with PVC %s/%s: %s ", storageClass.Provisioner, pv.Name, pvc.Namespace, pvc.Name, secretNamespace)
+
+			// Get secret that stores credentials to Azure Storage Account
+			secretNamespace, err = util.GetAzureFileSecretNamespace(pvc, pv, storageClass, p.Log, isDynamicallyProvisioned)
+			if err != nil {
+				p.Log.Errorf(
+					"Could not find secret namesapce for %s PV %s bounded with PVC %s/%s",
+					storageClass.Provisioner, pv.Name, pvc.Namespace, pvc.Namespace,
+				)
+				return nil, nil, errors.WithStack(err)
+			}
+			p.Log.Infof("Found secret namespace for %s PV %s bounded with PVC %s/%s: %s ", storageClass.Provisioner, pv.Name, pvc.Namespace, pvc.Name, secretNamespace)
+
+			// Get name of the secret that stores credentials to Azure Storage Account
+			secretName, err = util.GetAzureFileSecretName(pvc, pv, storageClass, p.Log, isDynamicallyProvisioned)
+			if err != nil {
+				p.Log.Errorf(
+					"Could not find secret name for %s PV %s bounded with PVC %s/%s",
+					storageClass.Provisioner, pv.Name, pvc.Namespace, pvc.Namespace,
+				)
+				return nil, nil, errors.WithStack(err)
+			}
+			p.Log.Infof("Found secret name for %s PV %s bounded with PVC %s/%s: %s ", storageClass.Provisioner, pv.Name, pvc.Namespace, pvc.Name, secretNamespace)
+
+			// Set annotation that will be later read by the Azure Files Mover
+			ccAzureFilesAnnotations := map[string]string{
+				StaticAzureFilePvcAnnotation:                shareName,
+				StaticAzureFilePvcSecretNameAnnotation:      secretName,
+				StaticAzureFilePvcSecretNamespaceAnnotation: secretNamespace,
+			}
+			for k, v := range ccAzureFilesAnnotations {
+				vals[k] = v
+			}
+			p.Log.Infof("Setting new annotations %v for PVC %s/%s", vals, pvc.Namespace, pvc.Name)
 		}
 	}
 
