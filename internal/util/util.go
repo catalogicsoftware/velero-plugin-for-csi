@@ -33,6 +33,7 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/label"
 	"github.com/vmware-tanzu/velero/pkg/restic"
 	corev1api "k8s.io/api/core/v1"
+	v1 "k8s.io/api/storage/v1"
 	kerror "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -617,4 +618,163 @@ func GetClientset(log logrus.FieldLogger) (*kubernetes.Clientset, error) {
 		return nil, err
 	}
 	return clientset, nil
+}
+
+// GetAzureFileSecretNamespace returns namespace where secret for Azure Storage Account
+// is present.
+func GetAzureFileSecretNamespace(pvc corev1api.PersistentVolumeClaim, pv *corev1api.PersistentVolume, sc *v1.StorageClass, log logrus.FieldLogger, isDynamicallyProvisioned bool) (string, error) {
+	var secretNamespace string
+	var exists bool
+
+	volumeAttributes := pv.Spec.CSI.VolumeAttributes
+	nodeStageSecretRef := pv.Spec.CSI.NodeStageSecretRef
+
+	// In case of statically provisioned PVs, first look at nodeStageSecretRef
+	// and see if secret details are set there.
+	// If not, follow the procedure for dynamically provisioned volumes.
+	if !isDynamicallyProvisioned {
+		if nodeStageSecretRef == nil {
+			log.Infof(
+				"Statically provisioned %s PV %s bounded with PVC %s/%s does not have \"nodeStageSecretRef\" set. Checking volume attributes for secret namespace",
+				sc.Provisioner, pv.Name, pvc.Namespace, pvc.Name,
+			)
+		} else {
+			secretNamespace = nodeStageSecretRef.Namespace
+			if secretNamespace != "" {
+				log.Infof(
+					"Statically provisioned %s PV %s bounded with PVC %s/%s has \"nodeStageSecretRef.namespace\" set.",
+					sc.Provisioner, pv.Name, pvc.Namespace, pvc.Name,
+				)
+				return secretNamespace, nil
+			}
+			log.Infof(
+				"Statically provisioned %s PV %s bounded with PVC %s/%s does not have \"nodeStageSecretRef.namespace\" set. Checking volume attributes for secret namespace",
+				sc.Provisioner, pv.Name, pvc.Namespace, pvc.Name,
+			)
+		}
+	}
+
+	secretNamespace, exists = volumeAttributes["secretnamespace"]
+	if !exists {
+		secretNamespace, exists = volumeAttributes["secretNamespace"]
+		if !exists {
+			if isDynamicallyProvisioned {
+				log.Infof(
+					"Dynamically provisioned %s PV %s bounded with PVC %s/%s does not have \"secretnamespace\" or \"secretNamespace\" attribute. Assuming PVC namespace as the secret namespace",
+					sc.Provisioner, pv.Name, pvc.Namespace, pvc.Name,
+				)
+				secretNamespace = pv.GetName()
+			} else {
+				err := fmt.Errorf(
+					"%s PV %s bounded with PVC %s/%s does not have \"secretnamespace\" or \"secretNamespace\" attribute",
+					sc.Provisioner, pv.Name, pvc.Namespace, pvc.Name,
+				)
+				return "", errors.WithStack(err)
+			}
+		}
+	}
+	return secretNamespace, nil
+}
+
+// GetAzureFileSecretName check if secret name is stored in volume details.
+// If not, it returns an error.
+func GetAzureFileSecretName(pvc corev1api.PersistentVolumeClaim, pv *corev1api.PersistentVolume, sc *v1.StorageClass, log logrus.FieldLogger, isDynamicallyProvisioned bool) (string, error) {
+	var secretName string
+	var exists bool
+
+	volumeAttributes := pv.Spec.CSI.VolumeAttributes
+	nodeStageSecretRef := pv.Spec.CSI.NodeStageSecretRef
+
+	// In case of statically provisioned PVs, first look at nodeStageSecretRef
+	// and see if secret details  are set there.
+	// If not, follow the procedure for dynamically provisioned volumes.
+	if !isDynamicallyProvisioned {
+		if nodeStageSecretRef == nil {
+			log.Infof(
+				"Statically provisioned %s PV %s bounded with PVC %s/%s does not have \"nodeStageSecretRef\" set. Checking volume attributes for secret name",
+				sc.Provisioner, pv.Name, pvc.Namespace, pvc.Name,
+			)
+		} else {
+			secretName = nodeStageSecretRef.Name
+			if secretName != "" {
+				log.Infof(
+					"Statically provisioned %s PV %s bounded with PVC %s/%s has \"nodeStageSecretRef.name\" set.",
+					sc.Provisioner, pv.Name, pvc.Namespace, pvc.Name,
+				)
+				return secretName, nil
+			}
+			log.Infof(
+				"Statically provisioned %s PV %s bounded with PVC %s/%s does not have \"nodeStageSecretRef.name\" set. Checking volume attributes for secret name",
+				sc.Provisioner, pv.Name, pvc.Namespace, pvc.Name,
+			)
+		}
+	}
+
+	secretName, exists = volumeAttributes["secretname"]
+	if !exists {
+		secretName, exists = volumeAttributes["secretName"]
+		if !exists {
+			if isDynamicallyProvisioned {
+				log.Infof(
+					"Dynamically provisioned %s PV %s bounded with PVC %s/%s does not have \"secretName\" or \"secretname\" attribute",
+					sc.Provisioner, pv.Name, pvc.Namespace, pvc.Name,
+				)
+				// If secret name is not present in the attributes, it means the storage Account
+				// was created the CSI drvier. In such case, get the Storage account name from
+				// volumeHandle.
+				// Example:
+				// volumeHandle: <resource-group>#<storage-account-name>#<share-name>###<namespace>
+				volumeHandleSplit := strings.Split(pv.Spec.CSI.VolumeHandle, "#")
+				if len(volumeHandleSplit) < 2 {
+					err := fmt.Errorf(
+						"%s PV %s bounded with PVC %s/%s does not have \"secretname\" or \"secretName\" attribute. Failed to generate one",
+						sc.Provisioner, pv.Name, pvc.Namespace, pvc.Name,
+					)
+					return "", errors.WithStack(err)
+				}
+				storageAccountName := volumeHandleSplit[1]
+				secretName = fmt.Sprintf("azure-storage-account-%s-secret", storageAccountName)
+			} else {
+				err := fmt.Errorf(
+					"%s PV %s bounded with PVC %s/%s does not have \"secretname\" or \"secretName\" attribute",
+					sc.Provisioner, pv.Name, pvc.Namespace, pvc.Name,
+				)
+				return "", errors.WithStack(err)
+			}
+		}
+	}
+	return secretName, nil
+}
+
+// GetAzureFileShareName returns name of the Azure File share where files for a PV
+// are stored.
+// It checks for presence of "shareName" and "sharename" attribute in the Volume.
+// If none of them is set, it assumes PV name as the file share name.
+func GetAzureFileShareName(pvc corev1api.PersistentVolumeClaim, pv *corev1api.PersistentVolume, sc *v1.StorageClass, log logrus.FieldLogger, isDynamicallyProvisioned bool) (string, error) {
+	var shareName string
+	var exists bool
+
+	// Get share name. First check the attribute, if the shareName is not set,
+	// assume name of the PV.
+	volumeAttributes := pv.Spec.CSI.VolumeAttributes
+	shareName, exists = volumeAttributes["shareName"]
+	if !exists {
+		shareName, exists = volumeAttributes["sharename"]
+		if !exists {
+			if isDynamicallyProvisioned {
+				log.Infof(
+					"Dynamically provisioned %s PV %s bounded with PVC %s/%s does not have \"shareName\" or \"sharename\" attribute. Assuming PV name as the file share name",
+					sc.Provisioner, pv.Name, pvc.Namespace, pvc.Name,
+				)
+				shareName = pv.GetName()
+			} else {
+				err := fmt.Errorf(
+					"%s PV %s bounded with PVC %s/%s does not have \"sharename\" or \"shareName\" attribute",
+					sc.Provisioner, pv.Name, pvc.Namespace, pvc.Name,
+				)
+				return "", errors.WithStack(err)
+			}
+		}
+	}
+	return shareName, nil
 }
