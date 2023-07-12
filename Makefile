@@ -65,7 +65,7 @@ shell: build-dirs
 	@echo "running docker: $@"
 	@docker run \
 		-e GOFLAGS \
-		-i $(TTY) \
+		-it \
 		--rm \
 		-u $$(id -u):$$(id -g) \
 		-v "$$(pwd)/_output/bin:/output:delegated" \
