@@ -20,6 +20,7 @@ BUILD_IMAGE ?= golang:1.17.13-buster
 REGISTRY ?= catalogicsoftware
 IMAGE_NAME ?= $(REGISTRY)/velero-plugin-for-csi
 TAG ?= v0.3.1.11
+VERSION ?= v0.3.1.12
 
 IMAGE ?= $(IMAGE_NAME):$(TAG)
 
@@ -82,6 +83,13 @@ shell: build-dirs
 build-dirs:
 	@mkdir -p _output/bin/$(GOOS)/$(GOARCH)
 	@mkdir -p .go/src/$(PKG) .go/pkg .go/bin .go/std/$(GOOS)/$(GOARCH) .go/go-build
+
+# container builds a multiarch Docker image containing the binary
+docker-build:
+	docker buildx create --name multiarch
+	docker buildx use multiarch
+	docker buildx build -t $(IMAGE_NAME):$(VERSION) --platform=linux/arm64,linux/amd64 -f Dockerfile-common . --push
+
 
 .PHONY: container
 container: all build-dirs
