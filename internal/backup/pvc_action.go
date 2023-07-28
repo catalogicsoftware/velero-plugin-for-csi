@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 
+	"github.com/vmware-tanzu/velero-plugin-for-csi/internal/catalogic"
 	"github.com/vmware-tanzu/velero-plugin-for-csi/internal/util"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/kuberesource"
@@ -42,6 +43,10 @@ import (
 type PVCBackupItemAction struct {
 	Log logrus.FieldLogger
 }
+
+// liveCopyDrivers is a list of drivers for which we will skip creating the snapshot and will copy data live
+// Must match liveCopyDrivers in amdslib/utils/utils.go
+var liveCopyDrivers = []string{"nfs.csi.k8s.io", "efs.csi.aws.com", "driver.longhorn.io"}
 
 // AppliesTo returns information indicating that the PVCBackupItemAction should be invoked to backup PVCs.
 func (p *PVCBackupItemAction) AppliesTo() (velero.ResourceSelector, error) {
@@ -56,7 +61,7 @@ func (p *PVCBackupItemAction) AppliesTo() (velero.ResourceSelector, error) {
 // underlying PVs by creating volumesnapshot CSI API objects that will trigger the CSI driver to perform the snapshot operation on the volume.
 func (p *PVCBackupItemAction) Execute(item runtime.Unstructured, backup *velerov1api.Backup) (runtime.Unstructured, []velero.ResourceIdentifier, error) {
 	p.Log.Info("Starting PVCBackupItemAction")
-
+	var err error
 	// Do nothing if volume snapshots have not been requested in this backup
 	if boolptr.IsSetToFalse(backup.Spec.SnapshotVolumes) {
 		p.Log.Infof("Volume snapshotting not requested for backup %s/%s", backup.Namespace, backup.Name)
@@ -102,19 +107,58 @@ func (p *PVCBackupItemAction) Execute(item runtime.Unstructured, backup *velerov
 	p.Log.Infof("Fetching storage class for PV %s", *pvc.Spec.StorageClassName)
 	storageClass, err := client.StorageV1().StorageClasses().Get(context.TODO(), *pvc.Spec.StorageClassName, metav1.GetOptions{})
 	if err != nil {
+
+		message := fmt.Sprintf("Storage Class %s not found", *pvc.Spec.StorageClassName)
+		newErr := errors.Wrapf(err, message)
+		p.Log.Error(newErr.Error())
+		uErr := catalogic.UpdateSnapshotProgress(
+			&pvc,
+			nil,
+			nil,
+			"error",
+			message,
+			backup.Name,
+			p.Log,
+		)
+		if uErr != nil {
+			p.Log.Error(err, "<SNAPSHOT PROGRESS UPDATE> Failed to update snapshot progress. Continuing...")
+		}
 		return nil, nil, errors.Wrap(err, "error getting storage class")
 	}
+
+	config, err := catalogic.GetPluginConfig(p.Log)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "error getting plugin config")
+	}
+
+	for _, driver := range liveCopyDrivers {
+		if config.SnapshotLonghorn && (driver == "driver.longhorn.io") {
+			continue
+		}
+		if storageClass.Provisioner == driver {
+			p.Log.Infof("Skipping PVC %s/%s, associated PV %s with provisioner %s is not supported",
+				pvc.Namespace, pvc.Name, pv.Name, storageClass.Provisioner)
+			return item, nil, nil
+		}
+	}
+
 	p.Log.Debugf("Fetching volumesnapshot class for %s", storageClass.Provisioner)
 	snapshotClass, err := util.GetVolumeSnapshotClassForStorageClass(storageClass.Provisioner, snapshotClient.SnapshotV1())
 	if err != nil {
 		return nil, nil, errors.Wrapf(err, "failed to get volumesnapshotclass for storageclass %s", storageClass.Name)
 	}
 	p.Log.Infof("volumesnapshot class=%s", snapshotClass.Name)
-
+	// If deletetionPolicy is not Retain, then in the event of a disaster, the namespace is lost with the volumesnapshot object in it,
+	// the underlying volumesnapshotcontent and the volume snapshot in the storage provider is also deleted.
+	// In such a scenario, the backup objects will be useless as the snapshot handle itself will not be valid.
+	if snapshotClass.DeletionPolicy != snapshotv1api.VolumeSnapshotContentRetain {
+		p.Log.Warnf("DeletionPolicy on VolumeSnapshotClass %s is not %s; Deletion of VolumeSnapshot objects will lead to deletion of snapshot in the storage provider.",
+			snapshotClass.Name, snapshotv1api.VolumeSnapshotContentRetain)
+	}
 	// Craft the snapshot object to be created
 	snapshot := snapshotv1api.VolumeSnapshot{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: "velero-" + pvc.Name + "-",
+			GenerateName: "cc-" + pvc.Name + "-",
 			Namespace:    pvc.Namespace,
 			Labels: map[string]string{
 				velerov1api.BackupNameLabel: label.GetValidName(backup.Name),
@@ -128,15 +172,40 @@ func (p *PVCBackupItemAction) Execute(item runtime.Unstructured, backup *velerov
 		},
 	}
 
-	upd, err := snapshotClient.SnapshotV1().VolumeSnapshots(pvc.Namespace).Create(context.TODO(), &snapshot, metav1.CreateOptions{})
+	var upd *snapshotv1api.VolumeSnapshot
+
+	// catalogic variables
+	var snapshotState string
+	var snapshotStateMessage string
+	defer func(err error) {
+		uErr := catalogic.UpdateSnapshotProgress(&pvc, upd, nil, snapshotState, snapshotStateMessage, backup.Name, p.Log)
+		if uErr != nil {
+			p.Log.Error(err, "<SNAPSHOT PROGRESS UPDATE> Failed to update snapshot progress. Continuing...")
+		}
+	}(err)
+
+	upd, err = snapshotClient.SnapshotV1().VolumeSnapshots(pvc.Namespace).Create(context.TODO(), &snapshot, metav1.CreateOptions{})
 	if err != nil {
+		snapshotStateMessage = "error creating volume snapshot"
+		snapshotState = "error"
+		newErr := errors.Wrapf(err, snapshotStateMessage)
+		p.Log.Error(newErr.Error())
 		return nil, nil, errors.Wrapf(err, "error creating volume snapshot")
 	}
 	p.Log.Infof("Created volumesnapshot %s", fmt.Sprintf("%s/%s", upd.Namespace, upd.Name))
 
 	labels := map[string]string{
-		util.VolumeSnapshotLabel:    upd.Name,
-		velerov1api.BackupNameLabel: backup.Name,
+		util.VolumeSnapshotLabel:        upd.Name,
+		velerov1api.BackupNameLabel:     backup.Name,
+		"cloudcasa-initial-volume-name": pvc.Spec.VolumeName,
+	}
+
+	if storageClass != nil {
+		labels["cloudcasa-storage-class-provisioner"] = storageClass.Provisioner
+	}
+
+	if storageClass.Provisioner == "file.csi.azure.com" {
+		catalogic.SetStaticAzureAnotation(&pvc, labels, storageClass, p.Log)
 	}
 
 	annotations := labels
@@ -157,6 +226,8 @@ func (p *PVCBackupItemAction) Execute(item runtime.Unstructured, backup *velerov
 	for _, ai := range additionalItems {
 		p.Log.Debugf("%s: %s", ai.GroupResource.String(), ai.Name)
 	}
+	snapshotStateMessage = fmt.Sprintf("Waiting for CSI driver to reconcile volumesnapshot %s/%s", pvc.Namespace, pvc.Name)
+	snapshotState = "pending"
 
 	pvcMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&pvc)
 	if err != nil {
