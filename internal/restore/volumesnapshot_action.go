@@ -74,6 +74,18 @@ func (p *VolumeSnapshotRestoreItemAction) Execute(input *velero.RestoreItemActio
 		return &velero.RestoreItemActionExecuteOutput{}, errors.Wrapf(err, "failed to convert input.Item from unstructured")
 	}
 
+	// Check for VolumeSnapshotClass. If it uses "file.csi.azure.com" driver,
+	// skip VolumeSnapshotRestore action.
+	csiDriverName, exists := vs.Annotations[util.CSIDriverNameAnnotation]
+	if exists {
+		if csiDriverName == "file.csi.azure.com" {
+			p.Log.Infof("Found Azure Files CSI driver. VolumeSnapshot will not be restored.")
+			return &velero.RestoreItemActionExecuteOutput{
+				SkipRestore: true,
+			}, nil
+		}
+	}
+
 	// If cross-namespace restore is configured, change the namespace
 	// for VolumeSnapshot object to be restored
 	if val, ok := input.Restore.Spec.NamespaceMapping[vs.GetNamespace()]; ok {
@@ -102,7 +114,7 @@ func (p *VolumeSnapshotRestoreItemAction) Execute(input *velero.RestoreItemActio
 		// TODO: generated name will be like velero-velero-something. Fix that.
 		vsc := snapshotv1api.VolumeSnapshotContent{
 			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "velero-" + vs.Name + "-",
+				GenerateName: input.Restore.GetName() + "-" + vs.Name + "-",
 				Labels: map[string]string{
 					velerov1api.RestoreNameLabel: label.GetValidName(input.Restore.Name),
 				},
