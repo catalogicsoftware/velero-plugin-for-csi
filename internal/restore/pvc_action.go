@@ -19,6 +19,7 @@ package restore
 import (
 	"context"
 	"fmt"
+	"time"
 
 	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	"github.com/pkg/errors"
@@ -41,6 +42,7 @@ const (
 	AnnBetaStorageProvisioner = "volume.beta.kubernetes.io/storage-provisioner"
 	AnnSelectedNode           = "volume.kubernetes.io/selected-node"
 	HarvesterhCiIoOwnedBy     = "harvesterhci.io/owned-by"
+	AzureFilesSleepDuration   = 10 * time.Second
 )
 
 // PVCRestoreItemAction is a restore item action plugin for Velero
@@ -224,6 +226,12 @@ func (p *PVCRestoreItemAction) Execute(input *velero.RestoreItemActionExecuteInp
 			"cloudcasa-volume-snapshot-content-name": volumeSnapshotContentName,
 		}
 		util.AddAnnotations(&pvc.ObjectMeta, vscAnnotations)
+
+		// If too many Azure Files PVCs are restored at the same time, then it is highly possible
+		// that we will hit Azure throttling errors. Because of that, we sleep for a specified amount of time,
+		// and then we restore the PVC.
+		p.Log.Infof("Azure Files PVC Found %s/%s. Sleeping %v before returning from restore PVC action plugin", pvc.Namespace, pvc.Name, AzureFilesSleepDuration)
+		time.Sleep(AzureFilesSleepDuration)
 	}
 
 	pvcMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&pvc)
