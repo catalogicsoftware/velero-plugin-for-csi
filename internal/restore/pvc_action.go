@@ -19,6 +19,7 @@ package restore
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
@@ -32,18 +33,21 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/vmware-tanzu/velero-plugin-for-csi/internal/util"
+	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+
 	"github.com/vmware-tanzu/velero/pkg/plugin/velero"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 )
 
 const (
-	AnnBindCompleted          = "pv.kubernetes.io/bind-completed"
-	AnnBoundByController      = "pv.kubernetes.io/bound-by-controller"
-	AnnStorageProvisioner     = "volume.kubernetes.io/storage-provisioner"
-	AnnBetaStorageProvisioner = "volume.beta.kubernetes.io/storage-provisioner"
-	AnnSelectedNode           = "volume.kubernetes.io/selected-node"
-	HarvesterhCiIoOwnedBy     = "harvesterhci.io/owned-by"
-	AzureFilesSleepDuration   = 10 * time.Second
+	AnnBindCompleted                         = "pv.kubernetes.io/bind-completed"
+	AnnBoundByController                     = "pv.kubernetes.io/bound-by-controller"
+	AnnStorageProvisioner                    = "volume.kubernetes.io/storage-provisioner"
+	AnnBetaStorageProvisioner                = "volume.beta.kubernetes.io/storage-provisioner"
+	AnnSelectedNode                          = "volume.kubernetes.io/selected-node"
+	HarvesterhCiIoOwnedBy                    = "harvesterhci.io/owned-by"
+	DefaultAzureFilesSleepDuration           = 10 * time.Second
+	CCAzureFilesPvcRestoreWaitTimeAnnotation = "cloudcasa-azure-files-pvc-restore-wait-sec"
 )
 
 // PVCRestoreItemAction is a restore item action plugin for Velero
@@ -162,7 +166,7 @@ func (p *PVCRestoreItemAction) Execute(input *velero.RestoreItemActionExecuteInp
 
 			resetPVCSpec(&pvc, volumeSnapshotName)
 		} else {
-			err := ProcessAzureRestore(&pvc, volumeSnapshotName, p.Log)
+			err := ProcessAzureRestore(&pvc, volumeSnapshotName, input.Restore, p.Log)
 			if err != nil {
 				return nil, err
 			}
@@ -180,7 +184,7 @@ func (p *PVCRestoreItemAction) Execute(input *velero.RestoreItemActionExecuteInp
 	}, nil
 }
 
-func ProcessAzureRestore(pvc *corev1api.PersistentVolumeClaim, volumeSnapshotName string, log logrus.FieldLogger) error {
+func ProcessAzureRestore(pvc *corev1api.PersistentVolumeClaim, volumeSnapshotName string, restore *velerov1.Restore, log logrus.FieldLogger) error {
 	clientset, snapClient, err := util.GetClients()
 	if err != nil {
 		return errors.WithStack(err)
@@ -201,60 +205,64 @@ func ProcessAzureRestore(pvc *corev1api.PersistentVolumeClaim, volumeSnapshotNam
 	}
 
 	if csiDriverName != "file.csi.azure.com" {
-		vs, err := snapClient.SnapshotV1().VolumeSnapshots(pvc.Namespace).Get(context.TODO(), volumeSnapshotName, metav1.GetOptions{})
-		if err != nil {
-			return errors.Wrapf(err, fmt.Sprintf("Failed to get Volumesnapshot %s/%s to restore PVC %s/%s", pvc.Namespace, volumeSnapshotName, pvc.Namespace, pvc.Name))
-		}
-
-		if _, exists := vs.Annotations[util.VolumeSnapshotRestoreSize]; exists {
-			restoreSize, err := resource.ParseQuantity(vs.Annotations[util.VolumeSnapshotRestoreSize])
-			if err != nil {
-				return errors.Wrapf(err, fmt.Sprintf("Failed to parse %s from annotation on Volumesnapshot %s/%s into restore size",
-					vs.Annotations[util.VolumeSnapshotRestoreSize], vs.Namespace, vs.Name))
-			}
-			// It is possible that the volume provider allocated a larger capacity volume than what was requested in the backed up PVC.
-			// In this scenario the volumesnapshot of the PVC will endup being larger than its requested storage size.
-			// Such a PVC, on restore as-is, will be stuck attempting to use a Volumesnapshot as a data source for a PVC that
-			// is not large enough.
-			// To counter that, here we set the storage request on the PVC to the larger of the PVC's storage request and the size of the
-			// VolumeSnapshot
-			setPVCStorageResourceRequest(pvc, restoreSize, log)
-		}
-		resetPVCSpec(pvc, volumeSnapshotName)
-	} else {
-		// Set annotation that the PVC users Azure File CSI driver
-		annotations := map[string]string{
-			"cloudcasa-csi-driver-name": "file.csi.azure.com",
-		}
-		util.AddAnnotations(&pvc.ObjectMeta, annotations)
-		log.Infof("Found Azure Files CSI driver. PVC data source will not be changed.")
-
-		// Add annotation to the PVC with VolumeSnapshotContent name
-		vscList, err := snapClient.SnapshotV1().VolumeSnapshotContents().List(context.Background(), metav1.ListOptions{})
-		if err != nil {
-			return errors.Wrapf(err, fmt.Sprintf("Failed to list VolumeSnapshotContents to restore PVC %s/%s", pvc.Namespace, pvc.Name))
-		}
-		var volumeSnapshotContentName string
-		for _, vsc := range vscList.Items {
-			if vsc.Spec.VolumeSnapshotRef.Name == volumeSnapshotName {
-				volumeSnapshotContentName = vsc.Name
-				break
-			}
-		}
-		if volumeSnapshotContentName == "" {
-			return fmt.Errorf("Failed to get VolumeSnapshotContent for VolumeSnapshot %s/%s", pvc.Namespace, volumeSnapshotName)
-		}
-		vscAnnotations := map[string]string{
-			"cloudcasa-volume-snapshot-content-name": volumeSnapshotContentName,
-		}
-		util.AddAnnotations(&pvc.ObjectMeta, vscAnnotations)
-
-		// If too many Azure Files PVCs are restored at the same time, then it is highly possible
-		// that we will hit Azure throttling errors. Because of that, we sleep for a specified amount of time,
-		// and then we restore the PVC.
-		p.Log.Infof("Azure Files PVC Found %s/%s. Sleeping %v before returning from restore PVC action plugin", pvc.Namespace, pvc.Name, AzureFilesSleepDuration)
-		time.Sleep(AzureFilesSleepDuration)
+		return fmt.Errorf("ProcessAzureRestore called for not Azure File PVC: %s/%s", pvc.Namespace, pvc.Name)
 	}
+
+	// Set annotation that the PVC users Azure File CSI driver
+	annotations := map[string]string{
+		"cloudcasa-csi-driver-name": "file.csi.azure.com",
+	}
+	util.AddAnnotations(&pvc.ObjectMeta, annotations)
+	log.Infof("Found Azure Files CSI driver. PVC data source will not be changed.")
+
+	// Add annotation to the PVC with VolumeSnapshotContent name
+	vscList, err := snapClient.SnapshotV1().VolumeSnapshotContents().List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return errors.Wrapf(err, fmt.Sprintf("Failed to list VolumeSnapshotContents to restore PVC %s/%s", pvc.Namespace, pvc.Name))
+	}
+	var volumeSnapshotContentName string
+	for _, vsc := range vscList.Items {
+		if vsc.Spec.VolumeSnapshotRef.Name == volumeSnapshotName {
+			volumeSnapshotContentName = vsc.Name
+			break
+		}
+	}
+	if volumeSnapshotContentName == "" {
+		return fmt.Errorf("Failed to get VolumeSnapshotContent for VolumeSnapshot %s/%s", pvc.Namespace, volumeSnapshotName)
+	}
+	vscAnnotations := map[string]string{
+		"cloudcasa-volume-snapshot-content-name": volumeSnapshotContentName,
+	}
+	util.AddAnnotations(&pvc.ObjectMeta, vscAnnotations)
+
+	// If too many Azure Files PVCs are restored at the same time, then it is highly possible
+	// that we will hit Azure throttling errors. Because of that, we sleep for a specified amount of time,
+	// and then we restore the PVC.
+	pvcRestoreWaitTime := DefaultAzureFilesSleepDuration
+	pvcRestoreWaitTimeStr, ok := restore.GetAnnotations()[CCAzureFilesPvcRestoreWaitTimeAnnotation]
+	if !ok {
+		log.Infof(
+			"Restore object %q does not have %q annotation. Using default value: %v",
+			restore.Name, CCAzureFilesPvcRestoreWaitTimeAnnotation, DefaultAzureFilesSleepDuration,
+		)
+	} else {
+		pvcRestoreWaitTimeSec, err := strconv.ParseInt(pvcRestoreWaitTimeStr, 10, 64)
+		if err != nil {
+			log.Errorf(
+				"Failed to convert value %v of the annotation %q to int64. Error: %v. Using default value: %v",
+				pvcRestoreWaitTimeStr, CCAzureFilesPvcRestoreWaitTimeAnnotation, err, DefaultAzureFilesSleepDuration,
+			)
+		} else {
+			log.Infof(
+				"Value of %q annotation is set to %v. Using this value as the sleep time before returning from restore PVC action plugin",
+				CCAzureFilesPvcRestoreWaitTimeAnnotation, pvcRestoreWaitTimeSec,
+			)
+			pvcRestoreWaitTime = time.Duration(pvcRestoreWaitTimeSec) * time.Second
+		}
+	}
+
+	log.Infof("Azure Files PVC Found %s/%s. Sleeping %v before returning from restore PVC action plugin", pvc.Namespace, pvc.Name, pvcRestoreWaitTime)
+	time.Sleep(pvcRestoreWaitTime)
 	return nil
 }
 
