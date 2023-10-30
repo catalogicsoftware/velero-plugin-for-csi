@@ -67,7 +67,7 @@ shell: build-dirs
 	@echo "running docker: $@"
 	@docker run \
 		-e GOFLAGS \
-		-i $(TTY) \
+		-it \
 		--rm \
 		-u $$(id -u):$$(id -g) \
 		-v "$$(pwd)/_output/bin:/output:delegated" \
@@ -81,6 +81,11 @@ shell: build-dirs
 		-w /go/src/velero-plugin-for-csi \
 		$(BUILD_IMAGE) \
 		/bin/sh $(CMD)
+
+docker-build:
+	docker buildx create --name multiarch
+	docker buildx use multiarch
+	docker buildx build -t $(IMAGE_NAME):$(TAG) --platform=linux/arm64,linux/amd64 -f Dockerfile-common . --push
 
 build-dirs:
 	@mkdir -p _output/bin/$(GOOS)/$(GOARCH)
