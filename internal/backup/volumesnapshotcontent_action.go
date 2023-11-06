@@ -80,7 +80,9 @@ func (p *VolumeSnapshotContentBackupItemAction) Execute(item runtime.Unstructure
 		if vsc.Annotations == nil {
 			vsc.Annotations = make(map[string]string)
 		}
-		vals["cc-pvc-name"] = *vs.Spec.Source.PersistentVolumeClaimName
+		if vs.Spec.Source.PersistentVolumeClaimName != nil {
+			vals["cc-pvc-name"] = *vs.Spec.Source.PersistentVolumeClaimName
+		}
 		vals["cc-pvc-namespace"] = vs.GetNamespace()
 		util.AddAnnotations(&snapCont.ObjectMeta, vals)
 		util.AddAnnotations(&vsc.ObjectMeta, vals)
