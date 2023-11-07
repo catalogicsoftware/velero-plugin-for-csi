@@ -66,9 +66,14 @@ func (p *VolumeSnapshotContentBackupItemAction) Execute(item runtime.Unstructure
 	if err != nil {
 		return nil, nil, errors.Wrapf(err, fmt.Sprintf("failed to get volumesnapshot from volumesnapshotcontent %s", snapCont.GetName()))
 	}
-	if vs == nil {
-		return nil, nil, fmt.Errorf("nil value of VolumeSnapshot received")
+
+	// We have seen cases where returned volume snapshot data is not as expected so check explicitly.
+	// E.g. KUBEDR-5292.
+	if vs == nil || vs.Spec == nil || vs.Spec.Source == nil || vs.Spec.Source.PersistentVolumeClaimName == nil {
+		return nil, nil, fmt.Errorf("Invalid VolumeSnapshot data received, snap content %s, snapshot %s",
+			snapCont.GetName(), snapCont.Spec.VolumeSnapshotRef.Name)
 	}
+
 	vals := map[string]string{}
 
 	// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
