@@ -253,11 +253,18 @@ func ProcessAzureRestore(pvc *corev1api.PersistentVolumeClaim, volumeSnapshotNam
 				pvcRestoreWaitTimeStr, CCAzureFilesPvcRestoreWaitTimeAnnotation, err, DefaultAzureFilesSleepDuration,
 			)
 		} else {
-			log.Infof(
-				"Value of %q annotation is set to %v. Using this value as the sleep time before returning from restore PVC action plugin",
-				CCAzureFilesPvcRestoreWaitTimeAnnotation, pvcRestoreWaitTimeSec,
-			)
-			pvcRestoreWaitTime = time.Duration(pvcRestoreWaitTimeSec) * time.Second
+			if pvcRestoreWaitTimeSec == 0 {
+				log.Infof(
+					"Value of %q annotation is set to 0. Using default value: %v",
+					CCAzureFilesPvcRestoreWaitTimeAnnotation, DefaultAzureFilesSleepDuration,
+				)
+			} else {
+				log.Infof(
+					"Value of %q annotation is set to %v. Using this value as the sleep time before returning from restore PVC action plugin",
+					CCAzureFilesPvcRestoreWaitTimeAnnotation, pvcRestoreWaitTimeSec,
+				)
+				pvcRestoreWaitTime = time.Duration(pvcRestoreWaitTimeSec) * time.Second
+			}
 		}
 	}
 
