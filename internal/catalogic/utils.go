@@ -179,9 +179,21 @@ func GetPluginConfig(log logrus.FieldLogger) (*PluginConfig, error) {
 		log.Info("CSI snapshot timeout is set", "timeout", csiSnapshotTimeout)
 	}
 
+	storageClassBackupMethodMapBytes := configMap.BinaryData["storageClassBackupMethodMap"]
+	var storageClassBackupMethodMap map[string]string
+	if err := json.Unmarshal(storageClassBackupMethodMapBytes, &storageClassBackupMethodMap); err != nil {
+		log.Error(errors.Wrapf(err, "Failed to parse storageClassBackupMethodMap value %q from %q", string(storageClassBackupMethodMapBytes),
+			VeleroCsiPluginConfigMapName))
+		return nil, err
+	}
+	if len(storageClassBackupMethodMap) != 0 {
+		log.Info("Storage class backup method is set", "method", storageClassBackupMethodMap)
+	}
+
 	return &PluginConfig{
-		SnapshotLonghorn:   snapshotLonghorn,
-		CsiSnapshotTimeout: csiSnapshotTimeout,
+		SnapshotLonghorn:            snapshotLonghorn,
+		CsiSnapshotTimeout:          csiSnapshotTimeout,
+		StorageClassBackupMethodMap: storageClassBackupMethodMap,
 	}, nil
 }
 
