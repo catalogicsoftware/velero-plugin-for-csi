@@ -18,8 +18,9 @@ type PvcSnapshotProgressData struct {
 }
 
 type PluginConfig struct {
-	SnapshotLonghorn   bool
-	CsiSnapshotTimeout int
+	SnapshotLonghorn            bool
+	CsiSnapshotTimeout          int
+	StorageClassBackupMethodMap map[string]string
 }
 
 const (

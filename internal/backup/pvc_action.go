@@ -19,6 +19,7 @@ package backup
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -139,6 +140,19 @@ func (p *PVCBackupItemAction) Execute(item runtime.Unstructured, backup *velerov
 			p.Log.Infof("Skipping PVC %s/%s, associated PV %s with provisioner %s is not supported",
 				pvc.Namespace, pvc.Name, pv.Name, storageClass.Provisioner)
 			return item, nil, nil
+		}
+	}
+
+	if backupMethod, found := config.StorageClassBackupMethodMap[*pvc.Spec.StorageClassName]; found {
+		if strings.HasPrefix(backupMethod, "LIVE") {
+			if *pvc.Spec.VolumeMode != corev1api.PersistentVolumeBlock {
+				p.Log.Infof("Skipping PVC %s/%s with storage class %s and backup method %s",
+					pvc.Namespace, pvc.Name, *pvc.Spec.StorageClassName, backupMethod)
+				return item, nil, nil
+			} else {
+				p.Log.Infof("Ignoring PVC %s/%s backup method %s because it is a block volume",
+					pvc.Namespace, pvc.Name, backupMethod)
+			}
 		}
 	}
 
