@@ -18,10 +18,11 @@ ENV GIT_COMMIT_SHA=${COMMIT}
 ARG TARGETARCH
 
 RUN mkdir /plugins
-COPY _output/bin/linux/${TARGETARCH}/* /plugins/
+ADD _output/bin/linux/${TARGETARCH}/cp-plugin /bin/cp-plugin
+ADD _output/bin/linux/${TARGETARCH}/velero-plugin-for-csi /plugins/
 
 RUN groupadd -r nogroup && mkdir /licenses
 COPY LICENSE /licenses
 
 USER nobody:nogroup
-ENTRYPOINT ["/bin/bash", "-c", "cp /plugins/* /target/."]
+ENTRYPOINT ["/bin/cp-plugin", "/plugins/velero-plugin-for-csi", "/target/velero-plugin-for-csi"]
