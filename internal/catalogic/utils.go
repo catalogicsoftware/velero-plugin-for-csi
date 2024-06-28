@@ -159,6 +159,19 @@ func GetPluginConfig(log logrus.FieldLogger) (*PluginConfig, error) {
 		return nil, err
 	}
 
+	snapshotWherePossibleString := string(configMap.BinaryData["snapshotWherePossible"])
+	snapshotWherePossible, err := strconv.ParseBool(snapshotWherePossibleString)
+	if err != nil {
+		log.Error(errors.Wrapf(err, "Failed to parse snapshotWherePossible value %q from %q", snapshotWherePossibleString,
+			VeleroCsiPluginConfigMapName))
+		return nil, err
+	}
+	if snapshotWherePossible {
+		log.Info("Will snapshot PVCs where possible")
+	} else {
+		log.Info("Will backup all PVCs live")
+	}
+
 	snapshotLonghornString := string(configMap.BinaryData["snapshotLonghorn"])
 	snapshotLonghorn, err := strconv.ParseBool(snapshotLonghornString)
 	if err != nil {
@@ -191,6 +204,7 @@ func GetPluginConfig(log logrus.FieldLogger) (*PluginConfig, error) {
 	}
 
 	return &PluginConfig{
+		SnapshotWherePossible:       snapshotWherePossible,
 		SnapshotLonghorn:            snapshotLonghorn,
 		CsiSnapshotTimeout:          csiSnapshotTimeout,
 		StorageClassBackupMethodMap: storageClassBackupMethodMap,

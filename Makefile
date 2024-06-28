@@ -19,7 +19,7 @@ BUILD_IMAGE ?= golang:1.20.6-bullseye
 
 REGISTRY ?= catalogicsoftware
 IMAGE_NAME ?= $(REGISTRY)/velero-plugin-for-csi
-TAG ?= v0.5.1.6
+TAG ?= v0.5.1.7
 
 IMAGE ?= $(IMAGE_NAME):$(TAG)
 
